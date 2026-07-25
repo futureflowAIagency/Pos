@@ -182,7 +182,7 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
         count: periodServiceAgg[0]?.count || 0,
       },
     },
-    lowStockProducts: lowStock.slice(0, 8),
+    lowStockProducts: lowStock, // full list — Dashboard.jsx paginates client-side
     topProducts,
     slowMoving,
     recentOrders,

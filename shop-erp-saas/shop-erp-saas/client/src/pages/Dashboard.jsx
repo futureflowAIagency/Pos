@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { DollarSign, TrendingUp, TrendingDown, Package, AlertTriangle, ShoppingBag, Users, Trophy, Receipt, Activity, Sparkles, Banknote, Landmark, Smartphone, Wallet, CreditCard, Wrench, CalendarClock, PackageX } from 'lucide-react';
+import { DollarSign, TrendingUp, TrendingDown, Package, AlertTriangle, ShoppingBag, Users, Trophy, Receipt, Activity, Sparkles, Banknote, Landmark, Smartphone, Wallet, CreditCard, Wrench, CalendarClock, PackageX, ChevronLeft, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import StatCard from '../components/ui/StatCard.jsx';
@@ -12,6 +12,7 @@ import { taka, fmtDateTime } from '../utils/format.js';
 import { useLang } from '../context/LanguageContext.jsx';
 
 const niceAction = (s = '') => s.toLowerCase().replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+const LOW_STOCK_PAGE_SIZE = 8;
 
 export default function Dashboard() {
   const { lang } = useLang();
@@ -23,6 +24,7 @@ export default function Dashboard() {
   const [period, setPeriod] = useState('monthly');
   const [custom, setCustom] = useState({ from: '', to: '' });
   const [openOrder, setOpenOrder] = useState(null); // saleId for the details modal
+  const [lowStockPage, setLowStockPage] = useState(1);
 
   const loadSummary = async () => {
     const params = { period };
@@ -34,6 +36,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (period === 'custom' && (!custom.from || !custom.to)) return; // wait for both dates
     loadSummary();
+    setLowStockPage(1);
   }, [period, custom.from, custom.to]);
 
   useEffect(() => {
@@ -196,15 +199,30 @@ export default function Dashboard() {
         </div>
 
         <div className="card p-4">
-          <h3 className="font-semibold mb-3 flex items-center gap-2"><AlertTriangle size={18} className="text-amber-500" /> Low Stock Alert</h3>
+          <h3 className="font-semibold mb-3 flex items-center gap-2">
+            <AlertTriangle size={18} className="text-amber-500" /> Low Stock Alert
+            {data.lowStockProducts.length > 0 && <span className="text-xs font-normal text-slate-400">({data.lowStockProducts.length})</span>}
+          </h3>
           <DataTable
             columns={[
               { key: 'name', label: 'Product' },
               { key: 'stock', label: 'Stock', className: 'text-right', render: (r) => <span className="text-red-500 font-semibold">{r.stock}</span> },
             ]}
-            rows={data.lowStockProducts}
+            rows={data.lowStockProducts.slice((lowStockPage - 1) * LOW_STOCK_PAGE_SIZE, lowStockPage * LOW_STOCK_PAGE_SIZE)}
             empty="All stocked up ✅"
           />
+          {data.lowStockProducts.length > LOW_STOCK_PAGE_SIZE && (
+            <div className="flex items-center justify-between text-sm mt-2">
+              <span className="text-slate-400">
+                {(lowStockPage - 1) * LOW_STOCK_PAGE_SIZE + 1}–{Math.min(lowStockPage * LOW_STOCK_PAGE_SIZE, data.lowStockProducts.length)} of {data.lowStockProducts.length}
+              </span>
+              <div className="flex items-center gap-2">
+                <button className="btn-ghost p-1.5" disabled={lowStockPage <= 1} onClick={() => setLowStockPage((p) => Math.max(1, p - 1))}><ChevronLeft size={16} /></button>
+                <span>{lowStockPage} / {Math.max(1, Math.ceil(data.lowStockProducts.length / LOW_STOCK_PAGE_SIZE))}</span>
+                <button className="btn-ghost p-1.5" disabled={lowStockPage >= Math.ceil(data.lowStockProducts.length / LOW_STOCK_PAGE_SIZE)} onClick={() => setLowStockPage((p) => p + 1)}><ChevronRight size={16} /></button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
