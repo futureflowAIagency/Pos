@@ -4,6 +4,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
 import { tenantFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
+import { expiredError } from '../utils/expiry.js';
 import Sale from '../models/Sale.js';
 import Product from '../models/Product.js';
 import Customer from '../models/Customer.js';
@@ -44,6 +45,9 @@ export const createSale = asyncHandler(async (req, res) => {
       for (const it of items) {
         const product = await Product.findOne(tenantFilter(req, { _id: it.product })).session(session);
         if (!product) throw new ApiError(404, `Product not found: ${it.product}`);
+        // hard stop, server-side, so no client (or a stale held bill) can sell expired stock
+        const expired = expiredError(product);
+        if (expired) throw new ApiError(400, expired);
 
         // apply the product's percentage discount to get the effective selling price
         const pct = Math.min(Math.max(product.discountPercent || 0, 0), 100);

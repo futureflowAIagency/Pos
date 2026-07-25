@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Minus, Trash2, Search, Printer, Receipt, PauseCircle, ListChecks, ScanLine } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
-import { taka, fmtDateTime } from '../utils/format.js';
+import { taka, fmtDate, fmtDateTime, expiryStatus, daysUntil } from '../utils/format.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
@@ -17,6 +17,12 @@ const clampQty = (q, stock) => {
   if (stock != null && n > stock) n = stock;
   return n;
 };
+// Expired stock is never sellable. Returns the warning message for an expired
+// product, or null when it's fine (the server enforces the same rule — this is
+// the counter-facing warning). A product expiring TODAY is still sellable.
+const expiryBlock = (p) => (p?.expiryDate && expiryStatus(p.expiryDate) === 'expired')
+  ? `${p.name} expired on ${fmtDate(p.expiryDate)} — it cannot be sold`
+  : null;
 // stable per-line key: serial-tracked units are unique, products stack by id.
 // NOTE: `unitId` is the phone-unit (IMEI) id — kept separate from the product's
 // measurement `unit` field ('pcs'/'kg') so normal products never look serial-tracked.
@@ -147,6 +153,10 @@ export default function POS() {
   // that is focused straight away, so the cashier just types the number. An item
   // already in the cart isn't bumped — its existing quantity is typed over.
   const addToCart = (p, blankQty = false) => {
+    // single choke point for expiry — covers card clicks, barcode scans and the
+    // keyboard suggestion flow alike
+    const expired = expiryBlock(p);
+    if (expired) { toast.error(expired); return; }
     if (p.trackSerial) { toast.error(isMobile ? 'Scan the IMEI / serial to add this device' : 'Scan the unit code to add this item'); return; }
     setCart((c) => {
       const ex = c.find((i) => !i.unitId && i._id === p._id);
@@ -163,6 +173,8 @@ export default function POS() {
   // Add one specific serial-tracked device (by IMEI/serial) to the cart.
   const pushUnit = (u) => {
     const p = u.product;
+    const expired = expiryBlock(p);
+    if (expired) { toast.error(expired); return; }
     setCart((c) => {
       if (c.some((i) => i.unitId === u._id)) { toast.error('Device already in cart'); return c; }
       return [...c, {
@@ -208,6 +220,10 @@ export default function POS() {
         toast.error(isMobile ? 'Scan the IMEI / serial to add this device' : 'Scan the unit code to add this item');
         return;
       }
+      // expired / out-of-stock: warn but keep the typed text so it's obvious
+      // which item was refused, and don't clear the search box
+      const expired = expiryBlock(entry.p);
+      if (expired) { toast.error(expired); return; }
       if (entry.p.stock < 1) { toast.error('Out of stock'); return; }
       addToCart(entry.p, true);
       setFocusQtyKey(`p:${entry.p._id}`); // → empty qty box, focused (see effect below)
@@ -358,6 +374,10 @@ export default function POS() {
   const checkout = async () => {
     if (!cart.length) return toast.error('Cart is empty');
     if (cart.some((i) => !i.unitId && Number(i.qty) <= 0)) return toast.error('Enter a valid quantity');
+    // Catches an item that expired after it was added (e.g. a held bill resumed
+    // the next day) — the server rejects it too, this just says so plainly.
+    const expiredLine = cart.map(expiryBlock).find(Boolean);
+    if (expiredLine) return toast.error(expiredLine);
     const cleanPayments = payments.map((p) => ({ method: p.method, amount: Number(p.amount) || 0 })).filter((p) => p.amount > 0);
     // Nothing typed in any row → default to paying the full total via the first selected method.
     const sendPayments = cleanPayments.length ? cleanPayments : [{ method: payments[0]?.method || 'cash', amount: total }];
@@ -449,9 +469,13 @@ export default function POS() {
                     className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 ${idx === prodIndex ? 'bg-slate-100 dark:bg-slate-700' : ''}`}
                   >
                     <span className="truncate">
-                      <span className="font-medium">{p.name || 'Item'}</span>
+                      <span className={`font-medium ${expiryBlock(p) ? 'text-red-500 line-through' : ''}`}>{p.name || 'Item'}</span>
                       {s.kind === 'unit' && <span className="text-brand-500 ml-1 text-xs">{s.u.imei1 || s.u.serial}</span>}
                       {s.kind === 'product' && s.p.trackSerial && <span className="text-slate-400 ml-1 text-xs">{isMobile ? '(scan IMEI)' : '(scan code)'}</span>}
+                      {expiryBlock(p) && <span className="badge bg-red-100 text-red-700 ml-1">Expired — cannot sell</span>}
+                      {!expiryBlock(p) && expiryStatus(p.expiryDate) === 'soon' && (
+                        <span className="badge bg-amber-100 text-amber-700 ml-1">{daysUntil(p.expiryDate)}d left</span>
+                      )}
                     </span>
                     <span className="shrink-0 text-xs text-slate-400">
                       {s.kind === 'product' && <span className="mr-2">Stock: {s.p.stock}</span>}
@@ -487,8 +511,17 @@ export default function POS() {
 
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[60vh] overflow-y-auto pr-1">
           {products.map((p) => (
-            <button key={p._id} onClick={() => addToCart(p)} className="card p-3 text-left hover:ring-2 hover:ring-brand-500 transition">
-              <p className="font-medium text-sm truncate">{p.name}</p>
+            <button
+              key={p._id}
+              onClick={() => addToCart(p)}
+              className={`card p-3 text-left transition ${expiryBlock(p) ? 'opacity-60 ring-1 ring-red-400 cursor-not-allowed' : 'hover:ring-2 hover:ring-brand-500'}`}
+            >
+              <p className={`font-medium text-sm truncate ${expiryBlock(p) ? 'text-red-500' : ''}`}>{p.name}</p>
+              {expiryBlock(p) ? (
+                <p className="badge bg-red-100 text-red-700 my-0.5">Expired {fmtDate(p.expiryDate)} — cannot sell</p>
+              ) : expiryStatus(p.expiryDate) === 'soon' ? (
+                <p className="badge bg-amber-100 text-amber-700 my-0.5">Expires in {daysUntil(p.expiryDate)}d</p>
+              ) : null}
               {p.discountPercent > 0 ? (
                 <p className="font-bold">
                   <span className="text-xs line-through text-slate-400 mr-1">{taka(p.sellingPrice)}</span>
@@ -517,6 +550,8 @@ export default function POS() {
                   {taka(unitPrice(i))} × {i.qty}{i.discountPercent > 0 ? ` (-${i.discountPercent}%)` : ''}
                 </p>
                 {i.unitId && <p className="text-xs text-brand-500">IMEI: {i.imei1 || i.serial}</p>}
+                {/* a resumed held bill can contain an item that expired since it was held */}
+                {expiryBlock(i) && <p className="text-xs text-red-500 font-medium">Expired {fmtDate(i.expiryDate)} — remove to continue</p>}
               </div>
               {!i.unitId && <button onClick={() => changeQty(lineKey(i), -1)} className="btn-ghost p-1"><Minus size={14} /></button>}
               {!i.unitId && (

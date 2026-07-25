@@ -24,7 +24,7 @@ export const getUnits = asyncHandler(async (req, res) => {
     { imei2: { $regex: search, $options: 'i' } },
     { serial: { $regex: search, $options: 'i' } },
   ];
-  const units = await PhoneUnit.find(q).populate('product', 'name brand color storage sellingPrice discountPercent').sort('-createdAt');
+  const units = await PhoneUnit.find(q).populate('product', 'name brand color storage sellingPrice discountPercent expiryDate').sort('-createdAt');
   ok(res, { units, count: units.length });
 });
 
