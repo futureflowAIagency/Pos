@@ -9,11 +9,17 @@ const FIELD_ALIASES = {
   name: ['name', 'item name', 'item', 'product name', 'product', 'model'],
   category: ['category', 'category name', 'cat', 'type'],
   stock: ['stock', 'stock balance', 'qty', 'quantity', 'balance', 'in stock'],
-  supplier: ['supplier', 'supplier name', 'dealer', 'dealer name', 'company', 'company name', 'vendor'],
+  supplier: ['supplier', 'supplier name', 'dealer', 'dealer name', 'company', 'company name', 'vendor', 'seller', 'seller name'],
   barcode: ['barcode', 'bar code'],
   sku: ['sku', 'code', 'item code', 'product code'],
   purchasePrice: ['purchase price', 'buy price', 'buy', 'cost', 'cost price'],
   sellingPrice: ['selling price', 'sell price', 'sell', 'sale price', 'price', 'mrp'],
+  brand: ['brand'],
+  storage: ['storage', 'ram/rom', 'ram rom', 'variant'],
+  color: ['color', 'colour'],
+  warrantyBrandMonths: ['brand warranty (months)', 'brand warranty', 'warranty (brand)'],
+  warrantyShopMonths: ['shop warranty (months)', 'shop warranty', 'warranty (shop)'],
+  imeis: ['imeis', 'imei', 'imei numbers', 'imei / serial', 'imei/serial', 'imei numbers (comma separated)'],
 };
 
 const normalizeHeader = (h) => String(h || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -33,7 +39,9 @@ function mapHeaders(headers) {
 }
 
 // Normalizes any array-of-objects (keyed by whatever headers the source file
-// used) into our common shape: { supplierName, name, category, stock, barcode, sku, purchasePrice, sellingPrice }
+// used) into our common shape: { supplierName, name, category, stock, barcode,
+// sku, purchasePrice, sellingPrice, brand, storage, color, warrantyBrandMonths,
+// warrantyShopMonths, imeisRaw }
 function extractTabularObjects(rowObjects) {
   if (!rowObjects.length) return [];
   const headers = Object.keys(rowObjects[0]);
@@ -49,6 +57,12 @@ function extractTabularObjects(rowObjects) {
       sku: map.sku ? String(r[map.sku] || '').trim() : '',
       purchasePrice: map.purchasePrice != null ? r[map.purchasePrice] : '',
       sellingPrice: map.sellingPrice != null ? r[map.sellingPrice] : '',
+      brand: map.brand ? String(r[map.brand] || '').trim() : '',
+      storage: map.storage ? String(r[map.storage] || '').trim() : '',
+      color: map.color ? String(r[map.color] || '').trim() : '',
+      warrantyBrandMonths: map.warrantyBrandMonths != null ? r[map.warrantyBrandMonths] : '',
+      warrantyShopMonths: map.warrantyShopMonths != null ? r[map.warrantyShopMonths] : '',
+      imeisRaw: map.imeis ? String(r[map.imeis] || '').trim() : '',
     }))
     .filter((r) => r.name);
 }
@@ -89,6 +103,7 @@ function extractLegacyHtmlReport(text) {
           category: map.category ? cells[header.indexOf(map.category)]?.trim() || '' : '',
           stock: map.stock ? cells[header.indexOf(map.stock)] ?? '0' : '0',
           barcode: '', sku: '', purchasePrice: '', sellingPrice: '',
+          brand: '', storage: '', color: '', warrantyBrandMonths: '', warrantyShopMonths: '', imeisRaw: '',
         });
       }
       continue;

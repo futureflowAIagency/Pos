@@ -54,6 +54,7 @@ export default function ImportExport() {
   const [smartFile, setSmartFile] = useState(null);
   const [smartResult, setSmartResult] = useState(null);
   const [smartBusy, setSmartBusy] = useState(false);
+  const [smartRowAccept, setSmartRowAccept] = useState({}); // row index -> accepted?
 
   const loadHistory = async () => {
     const { data } = await api.get('/export/history/list');
@@ -142,18 +143,30 @@ export default function ImportExport() {
       fd.append('file', smartFile);
       const { data } = await api.post('/import/smart/preview', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setSmartResult(data.data);
+      const initial = {};
+      data.data.rows.forEach((r, i) => { initial[i] = r.accepted; });
+      setSmartRowAccept(initial);
     } catch (e) { toast.error(e.response?.data?.message || 'Could not read this file'); }
     setSmartBusy(false);
   };
+  const toggleSmartRow = (i) => setSmartRowAccept((m) => ({ ...m, [i]: !m[i] }));
+  const acceptedSmartCount = smartResult ? smartResult.rows.filter((_, i) => smartRowAccept[i]).length : 0;
+
   const smartCommit = async () => {
     if (!smartFile) return;
     setSmartBusy(true);
     try {
+      const skipRows = smartResult.rows.map((_, i) => i).filter((i) => !smartRowAccept[i]);
       const fd = new FormData();
       fd.append('file', smartFile);
+      fd.append('skipRows', JSON.stringify(skipRows));
       const { data } = await api.post('/import/smart/commit', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      toast.success(`Imported: ${data.data.createdProducts} new product(s), ${data.data.updatedProducts} updated, ${data.data.createdSuppliers} new supplier(s)`);
-      setSmartFile(null); setSmartResult(null);
+      const d = data.data;
+      toast.success(
+        `Imported: ${d.createdProducts} new product(s), ${d.existingProductsGivenImeis} existing product(s) given new IMEIs, ${d.addedUnits} IMEI(s) added` +
+        (d.skippedDuplicateImeis ? `, ${d.skippedDuplicateImeis} duplicate IMEI(s) skipped` : '')
+      );
+      setSmartFile(null); setSmartResult(null); setSmartRowAccept({});
       loadHistory();
     } catch (e) { toast.error(e.response?.data?.message || 'Import failed'); }
     setSmartBusy(false);
@@ -251,13 +264,15 @@ export default function ImportExport() {
         <h3 className="font-semibold flex items-center gap-2"><Sparkles size={18} className="text-brand-600" /> Smart Stock Import</h3>
         <p className="text-sm text-slate-500">
           Upload a stock file from any system — Excel (.xlsx/.xls), CSV, or plain text — in whatever column layout it already has.
-          This automatically detects supplier/dealer groupings and column names (Item/Name, Category, Stock/Qty, Supplier/Dealer, prices)
-          instead of requiring you to reformat it into a fixed template first.
+          This automatically detects supplier/dealer groupings and column names (Item/Name, Category, Stock/Qty, Supplier/Dealer, prices, IMEIs, warranty)
+          instead of requiring you to reformat it into a fixed template first. If a product model already exists here, only its IMEIs are added;
+          otherwise the product is created fresh from that row.
         </p>
         <div className="flex flex-wrap items-end gap-3">
+          <button className="btn-ghost" onClick={() => downloadTemplate('migration')}><FileText size={16} /> Download Migration Template</button>
           <div>
             <label className="label">File</label>
-            <input type="file" accept=".xlsx,.xls,.csv,.txt" className="input" onChange={(e) => { setSmartFile(e.target.files?.[0] || null); setSmartResult(null); }} />
+            <input type="file" accept=".xlsx,.xls,.csv,.txt" className="input" onChange={(e) => { setSmartFile(e.target.files?.[0] || null); setSmartResult(null); setSmartRowAccept({}); }} />
           </div>
           <button className="btn-ghost" disabled={smartBusy} onClick={smartPreview}>{smartBusy ? 'Reading…' : 'Preview'}</button>
         </div>
@@ -279,17 +294,38 @@ export default function ImportExport() {
             {smartResult.defaultTrackSerial && (
               <p className="text-xs text-slate-500 flex items-center gap-1"><CheckCircle2 size={13} className="text-brand-500" /> Products will be added as IMEI/Serial-tracked (this shop's Mobile default) — the imported stock count is a starting point; add each device's real IMEI via "Manage IMEIs" on the Products page to reconcile.</p>
             )}
-            {smartResult.sample.length > 0 && (
-              <div className="max-h-48 overflow-y-auto text-xs border border-slate-200 dark:border-slate-700 rounded-lg">
+            {smartResult.conflictCount > 0 && (
+              <p className="text-xs text-red-500 flex items-center gap-1"><AlertTriangle size={13} /> {smartResult.conflictCount} row(s) have an IMEI that already exists elsewhere — review and tick to accept anyway, or leave unticked to skip.</p>
+            )}
+
+            {smartResult.rows.length > 0 && (
+              <div className="max-h-96 overflow-y-auto text-xs border border-slate-200 dark:border-slate-700 rounded-lg">
                 <table className="w-full">
-                  <thead className="bg-slate-100 dark:bg-slate-700 text-left"><tr><th className="px-2 py-1">Product</th><th className="px-2 py-1">Category</th><th className="px-2 py-1">Supplier</th><th className="px-2 py-1 text-right">Stock</th></tr></thead>
-                  <tbody>{smartResult.sample.map((r, i) => (
-                    <tr key={i} className="border-t border-slate-200 dark:border-slate-700">
-                      <td className="px-2 py-1">{r.name}</td><td className="px-2 py-1">{r.category}</td><td className="px-2 py-1">{r.supplierName || '—'}</td><td className="px-2 py-1 text-right">{r.stock}</td>
+                  <thead className="bg-slate-100 dark:bg-slate-700 text-left sticky top-0">
+                    <tr>
+                      <th className="px-2 py-1">Include</th><th className="px-2 py-1">Product</th><th className="px-2 py-1">Category</th>
+                      <th className="px-2 py-1">Supplier</th><th className="px-2 py-1 text-right">Stock/IMEIs</th><th className="px-2 py-1">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>{smartResult.rows.map((r, i) => (
+                    <tr key={i} className={`border-t border-slate-200 dark:border-slate-700 ${r.status === 'conflict' ? 'bg-red-50 dark:bg-red-900/10' : ''}`}>
+                      <td className="px-2 py-1"><input type="checkbox" checked={!!smartRowAccept[i]} onChange={() => toggleSmartRow(i)} /></td>
+                      <td className="px-2 py-1">{r.data.name}</td>
+                      <td className="px-2 py-1">{r.data.category}</td>
+                      <td className="px-2 py-1">{r.data.supplierName || '—'}</td>
+                      <td className="px-2 py-1 text-right">{r.data.stock}</td>
+                      <td className="px-2 py-1">
+                        {r.status === 'new' && <span className="badge bg-green-100 text-green-700">New Product</span>}
+                        {r.status === 'existing' && <span className="badge bg-brand-100 text-brand-700">+ IMEIs → {r.matchedProductName}</span>}
+                        {r.status === 'conflict' && (
+                          <span className="text-red-600" title={r.conflicts.map((c) => `${c.imei} already under ${c.existingProduct}`).join('; ')}>
+                            ⚠ {r.conflicts.length} IMEI(s) already used (e.g. {r.conflicts[0].imei} → {r.conflicts[0].existingProduct})
+                          </span>
+                        )}
+                      </td>
                     </tr>
                   ))}</tbody>
                 </table>
-                {smartResult.validCount > smartResult.sample.length && <p className="text-center py-1 text-slate-400">…and {smartResult.validCount - smartResult.sample.length} more</p>}
               </div>
             )}
             {smartResult.errors.length > 0 && (
@@ -300,8 +336,8 @@ export default function ImportExport() {
                 </table>
               </div>
             )}
-            <button className="btn-primary" disabled={smartBusy || smartResult.validCount === 0} onClick={smartCommit}>
-              {smartBusy ? 'Importing…' : `Import ${smartResult.validCount} product(s)`}
+            <button className="btn-primary" disabled={smartBusy || acceptedSmartCount === 0} onClick={smartCommit}>
+              {smartBusy ? 'Importing…' : `Import ${acceptedSmartCount} accepted row(s)`}
             </button>
           </div>
         )}

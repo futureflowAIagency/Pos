@@ -29,13 +29,24 @@ const TEMPLATES = {
   },
   expenses: { columns: ['title', 'category', 'amount', 'source', 'note', 'date'], example: ['Shop Rent', 'Rent', '15000', 'cash', 'July rent', ''] },
   units: { columns: ['imei1', 'imei2', 'serial'], example: ['356789012345678', '', ''] },
+  // For shops migrating from another system into "Smart Stock Import" (not the
+  // strict per-entity importer above) — one row per product, with all its IMEIs
+  // together in one cell. If a product with this exact name already exists here,
+  // only its IMEIs are added; otherwise the whole product is created from this row.
+  migration: {
+    columns: ['Product Name', 'Category', 'Brand', 'Storage', 'Color', 'Buy Price', 'Sell Price', 'Discount %', 'Brand Warranty (months)', 'Shop Warranty (months)', 'Supplier / Seller Name', 'IMEIs (comma separated)'],
+    example: ['iPhone 13', 'Mobile', 'Apple', '128GB', 'Black', '55000', '62000', '0', '12', '6', 'Anik Telecom', '356789012345671, 356789012345672, 356789012345673'],
+  },
 };
 
 // @route GET /api/import/:entity/template
 export const downloadTemplate = asyncHandler(async (req, res) => {
   const t = TEMPLATES[req.params.entity];
   if (!t) throw new ApiError(400, `Unknown import entity: ${req.params.entity}`);
-  const csv = [t.columns.join(','), t.example.join(',')].join('\r\n');
+  // Quote any field containing a comma (e.g. the migration template's multi-IMEI
+  // example) so it round-trips correctly through parseCSV as one field, not several.
+  const escCsv = (v) => (/[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v);
+  const csv = [t.columns.map(escCsv).join(','), t.example.map(escCsv).join(',')].join('\r\n');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${req.params.entity}-template.csv"`);
   res.send(csv);
@@ -175,23 +186,62 @@ export const commitImport = asyncHandler(async (req, res) => {
 // data, or an error message. Stock/prices default to 0 when the source file
 // doesn't have them (e.g. this shop's old software never recorded prices) —
 // the owner fills those in afterward from the normal Edit Product screen.
+// If the row lists IMEIs, stock is derived from how many were actually listed
+// (one unit per IMEI) rather than trusting a separate stock/qty column.
 function normalizeSmartRow(row) {
   const name = String(row.name || '').trim();
   if (!name) return { ok: false, message: 'Missing product name' };
   const category = String(row.category || '').trim().replace(/^\(+\s*/, '').replace(/\s*\)+$/, '').trim() || 'General';
+  const imeis = [...new Set(String(row.imeisRaw || '').split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean))];
   return {
     ok: true,
     data: {
       supplierName: String(row.supplierName || '').trim(),
       name,
       category,
-      stock: Math.max(0, Math.round(num(row.stock, 0))),
+      stock: imeis.length || Math.max(0, Math.round(num(row.stock, 0))),
       barcode: String(row.barcode || '').trim(),
       sku: String(row.sku || '').trim(),
       purchasePrice: Math.max(0, num(row.purchasePrice, 0)),
       sellingPrice: Math.max(0, num(row.sellingPrice, 0)),
+      brand: String(row.brand || '').trim(),
+      storage: String(row.storage || '').trim(),
+      color: String(row.color || '').trim(),
+      warrantyBrandMonths: Math.max(0, num(row.warrantyBrandMonths, 0)),
+      warrantyShopMonths: Math.max(0, num(row.warrantyShopMonths, 0)),
+      imeis,
     },
   };
+}
+
+// Classifies each valid row as: 'new' (no product with this name+category yet —
+// will be created from this row's data), 'existing' (a matching product already
+// exists — per the client's instruction, ONLY its IMEIs get added, nothing else
+// about it changes), or 'conflict' (one or more of this row's IMEIs already
+// belong to a unit somewhere in this shop). Conflicts default to NOT accepted —
+// the owner must explicitly tick them to proceed, everything else defaults to accepted.
+async function classifyRows(req, valid) {
+  const allImeis = [...new Set(valid.flatMap((v) => v.imeis))];
+  const existingUnits = allImeis.length
+    ? await PhoneUnit.find(tenantFilter(req, { $or: [{ imei1: { $in: allImeis } }, { imei2: { $in: allImeis } }, { serial: { $in: allImeis } }] })).populate('product', 'name')
+    : [];
+  const imeiOwner = new Map(); // imei/serial -> owning product's name
+  for (const u of existingUnits) {
+    for (const code of [u.imei1, u.imei2, u.serial]) {
+      if (code && allImeis.includes(code)) imeiOwner.set(code, u.product?.name || 'another product');
+    }
+  }
+
+  const rows = [];
+  for (const data of valid) {
+    const existingProduct = await Product.findOne(tenantFilter(req, {
+      name: { $regex: `^${escapeRegex(data.name)}$`, $options: 'i' }, category: data.category,
+    }));
+    const conflicts = data.imeis.filter((code) => imeiOwner.has(code)).map((code) => ({ imei: code, existingProduct: imeiOwner.get(code) }));
+    const status = conflicts.length ? 'conflict' : existingProduct ? 'existing' : 'new';
+    rows.push({ data, status, matchedProductName: existingProduct?.name || null, conflicts, accepted: status !== 'conflict' });
+  }
+  return rows;
 }
 
 function runSmartValidation(req) {
@@ -209,29 +259,38 @@ function runSmartValidation(req) {
 // Dry-run for the "Smart Stock Import" — accepts any file shape (this shop's
 // old-software HTML-as-.xls export, a real .xlsx/.xls, or CSV/TXT with
 // whatever column names) and previews what it understood before writing anything.
+// Every row is classified as new / existing (IMEIs only) / conflict, so the
+// owner can review and accept or decline each one before committing.
 export const smartImportPreview = asyncHandler(async (req, res) => {
   const { format, total, valid, errors } = runSmartValidation(req);
   const suppliers = [...new Set(valid.map((v) => v.supplierName).filter(Boolean))].sort();
   const withPrices = valid.some((v) => v.purchasePrice > 0 || v.sellingPrice > 0);
   const business = await Business.findById(req.businessId);
+  const rows = await classifyRows(req, valid);
   ok(res, {
     format, total, validCount: valid.length, errorCount: errors.length,
-    errors: errors.slice(0, 200), suppliers, sample: valid.slice(0, 20), withPrices,
+    errors: errors.slice(0, 200), suppliers, withPrices, rows,
+    conflictCount: rows.filter((r) => r.status === 'conflict').length,
     defaultTrackSerial: business?.type === 'mobile',
   });
 });
 
-// @route POST /api/import/smart/commit  (multipart, field: file)
-// Find-or-creates a Supplier per distinct name, upserts each Product by
-// name+category (no barcode/SKU in this kind of legacy data), sets stock and
-// links the supplier. This is a historical-data migration, not a live
-// transaction — no Purchase/Expense is booked (unlike the Add-Product-with-
-// supplier flow), since there's no real payment happening right now.
+// @route POST /api/import/smart/commit  (multipart, field: file, plus a
+// `skipRows` form field — a JSON array of 0-based indices into the valid-row
+// list the owner declined during preview, e.g. conflict rows left unticked)
+// Find-or-creates a Supplier per distinct name. If a product with this exact
+// name+category already exists, ONLY its IMEIs are added — none of its own
+// fields (price/warranty/etc.) are touched. Otherwise the whole product is
+// created from the row. This is a historical-data migration, not a live
+// transaction — no Purchase/Expense is booked, since there's no real payment
+// happening right now.
 export const smartImportCommit = asyncHandler(async (req, res) => {
   const { valid, errors } = runSmartValidation(req);
+  let skipRows = new Set();
+  try { skipRows = new Set(JSON.parse(req.body.skipRows || '[]').map(Number)); } catch { /* malformed — treat as none skipped */ }
 
   const supplierCache = new Map();
-  let createdProducts = 0, updatedProducts = 0, createdSuppliers = 0;
+  let createdProducts = 0, existingProductsGivenImeis = 0, createdSuppliers = 0, addedUnits = 0, skippedDuplicateImeis = 0;
 
   // Mobile shops track every device by IMEI/serial individually — match the
   // same default the manual Add Product form already uses for this business type,
@@ -239,7 +298,10 @@ export const smartImportCommit = asyncHandler(async (req, res) => {
   const business = await Business.findById(req.businessId);
   const defaultTrackSerial = business?.type === 'mobile';
 
-  for (const data of valid) {
+  for (let i = 0; i < valid.length; i++) {
+    if (skipRows.has(i)) continue;
+    const data = valid[i];
+
     let supplierDoc = null;
     if (data.supplierName) {
       const key = data.supplierName.toLowerCase();
@@ -255,40 +317,51 @@ export const smartImportCommit = asyncHandler(async (req, res) => {
       }
     }
 
-    const existing = await Product.findOne(tenantFilter(req, {
+    let product = await Product.findOne(tenantFilter(req, {
       name: { $regex: `^${escapeRegex(data.name)}$`, $options: 'i' }, category: data.category,
     }));
-    if (existing) {
-      existing.stock = data.stock;
-      existing.trackSerial = defaultTrackSerial;
-      if (supplierDoc) existing.supplier = supplierDoc._id;
-      if (data.purchasePrice) existing.purchasePrice = data.purchasePrice;
-      if (data.sellingPrice) existing.sellingPrice = data.sellingPrice;
-      if (data.barcode) existing.barcode = data.barcode;
-      if (data.sku) existing.sku = data.sku;
-      await existing.save();
-      updatedProducts++;
+
+    if (product) {
+      existingProductsGivenImeis++;
     } else {
-      await Product.create({
-        business: req.businessId, name: data.name, category: data.category, stock: data.stock,
+      product = await Product.create({
+        business: req.businessId, name: data.name, category: data.category,
+        stock: data.imeis.length ? 0 : data.stock, // synced from real units below when IMEIs are given
         purchasePrice: data.purchasePrice, sellingPrice: data.sellingPrice,
         barcode: data.barcode || undefined, sku: data.sku,
+        brand: data.brand, storage: data.storage, color: data.color,
+        warrantyBrandMonths: data.warrantyBrandMonths, warrantyShopMonths: data.warrantyShopMonths,
         supplier: supplierDoc?._id || null,
-        trackSerial: defaultTrackSerial,
+        trackSerial: data.imeis.length > 0 || defaultTrackSerial,
       });
       createdProducts++;
     }
+
+    if (data.imeis.length) {
+      for (const code of data.imeis) {
+        const clash = await PhoneUnit.findOne(tenantFilter(req, { $or: [{ imei1: code }, { imei2: code }, { serial: code }] }));
+        if (clash) { skippedDuplicateImeis++; continue; } // already flagged during preview; re-checked defensively
+        await PhoneUnit.create({ business: req.businessId, product: product._id, imei1: code, status: 'in_stock' });
+        addedUnits++;
+      }
+      const inStock = await PhoneUnit.countDocuments(tenantFilter(req, { product: product._id, status: 'in_stock' }));
+      await Product.updateOne(tenantFilter(req, { _id: product._id }), { stock: inStock, trackSerial: true });
+    }
   }
 
+  const recordCount = createdProducts + existingProductsGivenImeis;
   await ImportExportLog.create({
     business: req.businessId, action: 'import', entity: 'smart-products', format: 'auto',
-    recordCount: createdProducts + updatedProducts, errorCount: errors.length, createdBy: req.user._id,
+    recordCount, errorCount: errors.length, createdBy: req.user._id,
   });
   await logActivity(req, {
     action: 'IMPORT_DATA', entity: 'Import',
-    meta: { entity: 'smart-products', created: createdProducts, updated: updatedProducts, suppliersCreated: createdSuppliers, errors: errors.length },
+    meta: { entity: 'smart-products', created: createdProducts, existingGivenImeis: existingProductsGivenImeis, suppliersCreated: createdSuppliers, unitsAdded: addedUnits, duplicateImeisSkipped: skippedDuplicateImeis, errors: errors.length },
   });
-  ok(res, { createdProducts, updatedProducts, createdSuppliers, skipped: errors.length, errors: errors.slice(0, 200) }, 'Import complete');
+  ok(res, {
+    createdProducts, existingProductsGivenImeis, createdSuppliers, addedUnits, skippedDuplicateImeis,
+    skipped: errors.length, errors: errors.slice(0, 200),
+  }, 'Import complete');
 });
 
 // @route POST /api/import/backup/restore  body: { json }
