@@ -22,9 +22,9 @@ const genInvoiceNo = () =>
 export const createSale = asyncHandler(async (req, res) => {
   const { items = [], discount = 0, paid = 0, paymentMethod = 'cash', payments: reqPayments = null, customer = null, customerName: reqName = '', customerPhone = '', customerNid = '' } = req.body;
   if (!items.length) throw new ApiError(400, 'No items in sale');
-  // Walk-in is removed: a sale must always be tied to a customer (by id, or by name + phone).
-  if (!customer && !(String(reqName).trim() && String(customerPhone).trim()))
-    throw new ApiError(400, 'Customer name and phone are required');
+  // Customer identity is OPTIONAL for every shop type — a counter/walk-in sale
+  // needs no name or phone. The one exception is enforced below, once the due is
+  // known: an unpaid balance must be attached to someone or it's untraceable.
 
   // Normalize the payment breakdown: drop zero/invalid lines, clamp to known tenders.
   const cleanPayments = (Array.isArray(reqPayments) ? reqPayments : [])
@@ -120,6 +120,9 @@ export const createSale = asyncHandler(async (req, res) => {
           nid: customerNid || '',
         }], { session });
       }
+
+      // A due can only be collected later if it belongs to a customer record.
+      if (due > 0 && !custDoc) throw new ApiError(400, 'Customer name or phone is required when the sale leaves a due');
 
       const customerName = custDoc?.name || String(reqName).trim() || 'Walk-in';
       const nid = customerNid || custDoc?.nid || '';

@@ -47,6 +47,9 @@ export default function POS() {
   // product-name suggestion dropdown (keyboard-first: type → ↑↓ → Enter → cart)
   const [prodOpen, setProdOpen] = useState(false);
   const [prodIndex, setProdIndex] = useState(0);
+  // cart line whose quantity box should receive focus next (set right after a
+  // product is picked by keyboard, so the qty can be typed immediately)
+  const [focusQtyKey, setFocusQtyKey] = useState(null);
   // past-invoice lookup / reprint
   const [pastOpen, setPastOpen] = useState(false);
   const [findTerm, setFindTerm] = useState('');
@@ -69,6 +72,7 @@ export default function POS() {
   // discount → first payment amount → Complete Sale. Each field's Enter key
   // hands focus to the next ref.
   const searchRef = useRef(null);
+  const qtyRefs = useRef({}); // lineKey → cart quantity input
   const custPhoneRef = useRef(null);
   const custNameRef = useRef(null);
   const nidRef = useRef(null);
@@ -139,16 +143,20 @@ export default function POS() {
   };
 
   // ---------- cart ops ----------
-  const addToCart = (p) => {
+  // `blankQty` = the keyboard flow: the line is added with an EMPTY quantity box
+  // that is focused straight away, so the cashier just types the number. An item
+  // already in the cart isn't bumped — its existing quantity is typed over.
+  const addToCart = (p, blankQty = false) => {
     if (p.trackSerial) { toast.error(isMobile ? 'Scan the IMEI / serial to add this device' : 'Scan the unit code to add this item'); return; }
     setCart((c) => {
       const ex = c.find((i) => !i.unitId && i._id === p._id);
       if (ex) {
+        if (blankQty) return c;
         if (ex.qty >= p.stock) { toast.error('Not enough stock'); return c; }
         return c.map((i) => (!i.unitId && i._id === p._id) ? { ...i, qty: i.qty + 1 } : i);
       }
       if (p.stock < 1) { toast.error('Out of stock'); return c; }
-      return [...c, { ...p, qty: 1 }];
+      return [...c, { ...p, qty: blankQty ? '' : 1 }];
     });
   };
 
@@ -190,7 +198,9 @@ export default function POS() {
   const pickSuggestion = (entry) => {
     if (!entry) return;
     if (entry.kind === 'unit') {
+      // one exact device — quantity is always 1, so there is nothing to type
       pushUnit(entry.u);
+      searchRef.current?.focus();
     } else {
       // serial-tracked items must be added by their unique code, not by name —
       // leave the typed text alone so the code can be scanned instead.
@@ -198,17 +208,40 @@ export default function POS() {
         toast.error(isMobile ? 'Scan the IMEI / serial to add this device' : 'Scan the unit code to add this item');
         return;
       }
-      addToCart(entry.p);
+      if (entry.p.stock < 1) { toast.error('Out of stock'); return; }
+      addToCart(entry.p, true);
+      setFocusQtyKey(`p:${entry.p._id}`); // → empty qty box, focused (see effect below)
     }
     setSearch('');
     setProdOpen(false);
     setProdIndex(0);
-    searchRef.current?.focus(); // stay in the box, ready for the next product
   };
 
-  // Enter with a highlighted suggestion adds it to the cart; Enter with nothing
-  // to add (cart done) jumps straight to the customer section.
+  // Move the caret into the just-added line's quantity box once it has rendered.
+  useEffect(() => {
+    if (!focusQtyKey) return;
+    const el = qtyRefs.current[focusQtyKey];
+    if (!el) return; // line not painted yet — retry on the next cart render
+    el.focus(); el.select();
+    setFocusQtyKey(null);
+  }, [focusQtyKey, cart]);
+
+  // Quantity typed → Enter goes back to the search box for the next product.
+  // Shift+Enter (from anywhere in the entry flow) jumps to the customer fields.
+  const qtyKeyDown = (e, key) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (e.target.value === '' || Number(e.target.value) <= 0) setQty(key, '1'); // blank = 1
+    if (e.shiftKey) custPhoneRef.current?.focus();
+    else searchRef.current?.focus();
+  };
+
+  // Enter with a highlighted suggestion adds it to the cart; Shift+Enter (or
+  // Enter with nothing left to add) jumps straight to the customer section.
   const searchKeyDown = (e) => {
+    if (e.key === 'Enter' && e.shiftKey) {
+      e.preventDefault(); setProdOpen(false); custPhoneRef.current?.focus(); return;
+    }
     if (e.key === 'ArrowDown' && suggestList.length) {
       e.preventDefault(); setProdOpen(true);
       setProdIndex((i) => (i + 1 >= suggestList.length ? 0 : i + 1));
@@ -325,10 +358,18 @@ export default function POS() {
   const checkout = async () => {
     if (!cart.length) return toast.error('Cart is empty');
     if (cart.some((i) => !i.unitId && Number(i.qty) <= 0)) return toast.error('Enter a valid quantity');
-    if (!custPhone.trim() || !custName.trim()) return toast.error('Customer name and phone are required');
     const cleanPayments = payments.map((p) => ({ method: p.method, amount: Number(p.amount) || 0 })).filter((p) => p.amount > 0);
     // Nothing typed in any row → default to paying the full total via the first selected method.
     const sendPayments = cleanPayments.length ? cleanPayments : [{ method: payments[0]?.method || 'cash', amount: total }];
+    // Customer phone/name are optional for every shop type (walk-in counter
+    // sales). Only a sale that actually leaves a due needs someone to attach it
+    // to — otherwise the money owed could never be collected. Uses the payments
+    // being sent, so a blank amount (= paid in full) is not treated as a due.
+    const dueNow = Math.max(0, total - sendPayments.reduce((s, p) => s + p.amount, 0));
+    if (dueNow > 0 && !matchedCustomer && !custPhone.trim() && !custName.trim()) {
+      custPhoneRef.current?.focus();
+      return toast.error('This sale has a due — enter the customer phone or name');
+    }
     try {
       const { data } = await api.post('/sales', {
         items: cart.map((i) => i.unitId ? { product: i._id, qty: 1, unit: i.unitId } : { product: i._id, qty: Number(i.qty) }),
@@ -424,7 +465,8 @@ export default function POS() {
         </div>
         {!supportsUnits && (
           <p className="text-xs text-slate-400">
-            Keyboard only: type a name, ↑ ↓ to choose, Enter adds it to the cart. Press Enter on an empty box to jump to the customer fields, then Enter through name → discount → payment → Complete Sale.
+            Keyboard only: type a name, ↑ ↓ to choose, Enter → the quantity box (type the number, Enter comes straight back here for the next item).
+            <b> Shift + Enter</b> jumps to the customer fields, then Enter walks through name → discount → payment → Complete Sale.
           </p>
         )}
 
@@ -479,10 +521,12 @@ export default function POS() {
               {!i.unitId && <button onClick={() => changeQty(lineKey(i), -1)} className="btn-ghost p-1"><Minus size={14} /></button>}
               {!i.unitId && (
                 <input
+                  ref={(el) => { if (el) qtyRefs.current[lineKey(i)] = el; else delete qtyRefs.current[lineKey(i)]; }}
                   type="number" min="0" step="any"
                   className="input w-16 text-center px-1 py-1"
                   value={i.qty}
                   onChange={(e) => setQty(lineKey(i), e.target.value)}
+                  onKeyDown={(e) => qtyKeyDown(e, lineKey(i))}
                   onBlur={(e) => { if (e.target.value === '' || Number(e.target.value) <= 0) setQty(lineKey(i), '1'); }}
                 />
               )}
@@ -495,7 +539,7 @@ export default function POS() {
         <div className="border-t border-slate-200 dark:border-slate-700 mt-3 pt-3 space-y-2 text-sm">
           <div className="grid grid-cols-2 gap-2">
             <div className="relative">
-              <label className="label">Customer Phone</label>
+              <label className="label">Customer Phone (optional)</label>
               <input
                 ref={custPhoneRef}
                 className="input"
@@ -529,7 +573,7 @@ export default function POS() {
               )}
             </div>
             <div>
-              <label className="label">Customer Name</label>
+              <label className="label">Customer Name (optional)</label>
               <input
                 ref={custNameRef}
                 className="input"
