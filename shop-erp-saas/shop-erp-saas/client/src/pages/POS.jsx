@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Minus, Trash2, Search, Printer, Receipt, PauseCircle, ListChecks, ScanLine } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
@@ -41,6 +41,12 @@ export default function POS() {
   const [customerNid, setCustomerNid] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [suggestOpen, setSuggestOpen] = useState(false);
+  // keyboard-highlighted customer suggestion (-1 = none picked yet; Enter alone
+  // never auto-attaches a customer, it just moves on to the name field)
+  const [custIndex, setCustIndex] = useState(-1);
+  // product-name suggestion dropdown (keyboard-first: type → ↑↓ → Enter → cart)
+  const [prodOpen, setProdOpen] = useState(false);
+  const [prodIndex, setProdIndex] = useState(0);
   // past-invoice lookup / reprint
   const [pastOpen, setPastOpen] = useState(false);
   const [findTerm, setFindTerm] = useState('');
@@ -58,6 +64,17 @@ export default function POS() {
   const [holdsOpen, setHoldsOpen] = useState(false);
   // mobile IMEI scan
   const [imei, setImei] = useState('');
+
+  // Mouse-free checkout chain: search → customer phone → name → (NID) →
+  // discount → first payment amount → Complete Sale. Each field's Enter key
+  // hands focus to the next ref.
+  const searchRef = useRef(null);
+  const custPhoneRef = useRef(null);
+  const custNameRef = useRef(null);
+  const nidRef = useRef(null);
+  const discountRef = useRef(null);
+  const payAmountRef = useRef(null);
+  const checkoutRef = useRef(null);
 
   const load = async () => {
     const { data } = await api.get('/products', { params: { search } });
@@ -100,6 +117,25 @@ export default function POS() {
     setMatchedCustomer(c);
     setSuggestOpen(false);
     setSuggestions([]);
+    setCustIndex(-1);
+  };
+
+  // Arrow/Enter navigation for the customer-phone suggestions (mouse-free).
+  const custKeyDown = (e) => {
+    if (e.key === 'ArrowDown' && suggestions.length) {
+      e.preventDefault(); setSuggestOpen(true);
+      setCustIndex((i) => (i + 1 >= suggestions.length ? 0 : i + 1));
+    } else if (e.key === 'ArrowUp' && suggestions.length) {
+      e.preventDefault(); setSuggestOpen(true);
+      setCustIndex((i) => (i <= 0 ? suggestions.length - 1 : i - 1));
+    } else if (e.key === 'Escape') {
+      setSuggestOpen(false); setCustIndex(-1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const picked = suggestOpen && custIndex >= 0 ? suggestions[custIndex] : null;
+      if (picked) pickCustomer(picked);
+      custNameRef.current?.focus();
+    }
   };
 
   // ---------- cart ops ----------
@@ -126,6 +162,67 @@ export default function POS() {
         qty: 1, unitId: u._id, imei1: u.imei1, imei2: u.imei2, serial: u.serial,
       }];
     });
+  };
+
+  // ---------- keyboard product search (type name → ↑↓ → Enter → cart) ----------
+  // Only in-stock items are suggested; for unit-tracking shops the matching
+  // unique-code units come first (they add one exact device).
+  const suggestList = useMemo(() => {
+    const units = supportsUnits ? unitResults.map((u) => ({ kind: 'unit', key: `u:${u._id}`, u })) : [];
+    const prods = products.filter((p) => p.stock > 0).map((p) => ({ kind: 'product', key: `p:${p._id}`, p }));
+    // The product fetch is debounced, so the loaded list can lag one keystroke
+    // behind. Re-check each entry against what is typed right now (same fields
+    // the server matches on) so Enter can never add a stale, non-matching item.
+    const term = search.trim().toLowerCase();
+    const matches = (s) => {
+      if (!term) return true;
+      const hay = s.kind === 'unit'
+        ? `${s.u.imei1 || ''} ${s.u.imei2 || ''} ${s.u.serial || ''} ${s.u.product?.name || ''}`
+        : `${s.p.name || ''} ${s.p.sku || ''} ${s.p.barcode || ''}`;
+      return hay.toLowerCase().includes(term);
+    };
+    return [...units, ...prods].filter(matches).slice(0, 40);
+  }, [products, unitResults, supportsUnits, search]);
+
+  // keep the highlight on the first match whenever the result set changes
+  useEffect(() => { setProdIndex(0); }, [search]);
+
+  const pickSuggestion = (entry) => {
+    if (!entry) return;
+    if (entry.kind === 'unit') {
+      pushUnit(entry.u);
+    } else {
+      // serial-tracked items must be added by their unique code, not by name —
+      // leave the typed text alone so the code can be scanned instead.
+      if (entry.p.trackSerial) {
+        toast.error(isMobile ? 'Scan the IMEI / serial to add this device' : 'Scan the unit code to add this item');
+        return;
+      }
+      addToCart(entry.p);
+    }
+    setSearch('');
+    setProdOpen(false);
+    setProdIndex(0);
+    searchRef.current?.focus(); // stay in the box, ready for the next product
+  };
+
+  // Enter with a highlighted suggestion adds it to the cart; Enter with nothing
+  // to add (cart done) jumps straight to the customer section.
+  const searchKeyDown = (e) => {
+    if (e.key === 'ArrowDown' && suggestList.length) {
+      e.preventDefault(); setProdOpen(true);
+      setProdIndex((i) => (i + 1 >= suggestList.length ? 0 : i + 1));
+    } else if (e.key === 'ArrowUp' && suggestList.length) {
+      e.preventDefault(); setProdOpen(true);
+      setProdIndex((i) => (i <= 0 ? suggestList.length - 1 : i - 1));
+    } else if (e.key === 'Escape') {
+      setProdOpen(false);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const entry = prodOpen && search.trim() ? suggestList[prodIndex] : null;
+      if (entry) pickSuggestion(entry);
+      else custPhoneRef.current?.focus();
+    }
   };
 
   // Universal scan-to-cart: works for a device IMEI/serial AND a plain product
@@ -266,23 +363,70 @@ export default function POS() {
           </div>
         </div>
 
-        <div className="card p-3 flex items-center gap-2">
-          <ScanLine size={18} className="text-brand-500 shrink-0" />
-          <input
-            className="input"
-            autoFocus
-            placeholder="Scan barcode / IMEI / serial to add to cart..."
-            value={imei}
-            onChange={(e) => setImei(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') addByImei(); }}
-          />
-          <button className="btn-primary shrink-0" onClick={addByImei}>Add</button>
-        </div>
+        {/* Barcode / IMEI scanning — Pharmacy has no barcode or unit-code system,
+            so the scan box is hidden there and the name search is the only entry. */}
+        {supportsUnits && (
+          <div className="card p-3 flex items-center gap-2">
+            <ScanLine size={18} className="text-brand-500 shrink-0" />
+            <input
+              className="input"
+              autoFocus
+              placeholder="Scan barcode / IMEI / serial to add to cart..."
+              value={imei}
+              onChange={(e) => setImei(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') addByImei(); }}
+            />
+            <button className="btn-primary shrink-0" onClick={addByImei}>Add</button>
+          </div>
+        )}
 
         <div className="relative">
           <Search size={18} className="absolute left-3 top-2.5 text-slate-400" />
-          <input className="input pl-10" placeholder={supportsUnits ? 'Search products or unit code...' : 'Search products to add...'} value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input
+            ref={searchRef}
+            className="input pl-10"
+            autoFocus={!supportsUnits}
+            placeholder={supportsUnits ? 'Search products or unit code...' : 'Type product name — ↑ ↓ to select, Enter to add to cart'}
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setProdOpen(true); }}
+            onFocus={() => setProdOpen(true)}
+            onBlur={() => setTimeout(() => setProdOpen(false), 150)}
+            onKeyDown={searchKeyDown}
+          />
+          {prodOpen && search.trim() && suggestList.length > 0 && (
+            <div className="absolute z-30 mt-1 w-full max-h-72 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg">
+              {suggestList.map((s, idx) => {
+                const p = s.kind === 'unit' ? (s.u.product || {}) : s.p;
+                return (
+                  <button
+                    key={s.key}
+                    type="button"
+                    ref={(el) => { if (idx === prodIndex && el) el.scrollIntoView({ block: 'nearest' }); }}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setProdIndex(idx)}
+                    onClick={() => pickSuggestion(s)}
+                    className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 ${idx === prodIndex ? 'bg-slate-100 dark:bg-slate-700' : ''}`}
+                  >
+                    <span className="truncate">
+                      <span className="font-medium">{p.name || 'Item'}</span>
+                      {s.kind === 'unit' && <span className="text-brand-500 ml-1 text-xs">{s.u.imei1 || s.u.serial}</span>}
+                      {s.kind === 'product' && s.p.trackSerial && <span className="text-slate-400 ml-1 text-xs">{isMobile ? '(scan IMEI)' : '(scan code)'}</span>}
+                    </span>
+                    <span className="shrink-0 text-xs text-slate-400">
+                      {s.kind === 'product' && <span className="mr-2">Stock: {s.p.stock}</span>}
+                      <span className="text-brand-600 font-semibold">{taka(unitPrice({ sellingPrice: p.sellingPrice || 0, discountPercent: p.discountPercent || 0 }))}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
+        {!supportsUnits && (
+          <p className="text-xs text-slate-400">
+            Keyboard only: type a name, ↑ ↓ to choose, Enter adds it to the cart. Press Enter on an empty box to jump to the customer fields, then Enter through name → discount → payment → Complete Sale.
+          </p>
+        )}
 
         {supportsUnits && unitResults.length > 0 && (
           <div className="space-y-2">
@@ -353,22 +497,26 @@ export default function POS() {
             <div className="relative">
               <label className="label">Customer Phone</label>
               <input
+                ref={custPhoneRef}
                 className="input"
                 value={custPhone}
-                onChange={(e) => { setCustPhone(e.target.value); setSuggestOpen(true); }}
+                onChange={(e) => { setCustPhone(e.target.value); setSuggestOpen(true); setCustIndex(-1); }}
                 onFocus={() => setSuggestOpen(true)}
                 onBlur={() => setTimeout(() => setSuggestOpen(false), 150)}
+                onKeyDown={custKeyDown}
                 placeholder="01XXXXXXXXX"
               />
               {suggestOpen && suggestions.length > 0 && (
                 <div className="absolute z-30 mt-1 w-[200%] max-h-56 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg">
-                  {suggestions.map((c) => (
+                  {suggestions.map((c, idx) => (
                     <button
                       key={c._id}
                       type="button"
+                      ref={(el) => { if (idx === custIndex && el) el.scrollIntoView({ block: 'nearest' }); }}
                       onMouseDown={(e) => e.preventDefault()}
+                      onMouseEnter={() => setCustIndex(idx)}
                       onClick={() => pickCustomer(c)}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-between gap-2"
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-between gap-2 ${idx === custIndex ? 'bg-slate-100 dark:bg-slate-700' : ''}`}
                     >
                       <span className="truncate">
                         <span className="font-medium">{c.name}</span>
@@ -382,7 +530,14 @@ export default function POS() {
             </div>
             <div>
               <label className="label">Customer Name</label>
-              <input className="input" value={custName} onChange={(e) => setCustName(e.target.value)} placeholder="Customer name" />
+              <input
+                ref={custNameRef}
+                className="input"
+                value={custName}
+                onChange={(e) => setCustName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (isMobile ? nidRef : discountRef).current?.focus(); } }}
+                placeholder="Customer name"
+              />
             </div>
           </div>
           {matchedCustomer && (
@@ -393,10 +548,27 @@ export default function POS() {
           {isMobile && (
             <div>
               <label className="label">Customer NID / Identity</label>
-              <input className="input" value={customerNid} onChange={(e) => setCustomerNid(e.target.value)} placeholder="NID number (for warranty / records)" />
+              <input
+                ref={nidRef}
+                className="input"
+                value={customerNid}
+                onChange={(e) => setCustomerNid(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); discountRef.current?.focus(); } }}
+                placeholder="NID number (for warranty / records)"
+              />
             </div>
           )}
-          <div><label className="label">Discount</label><input className="input" type="number" value={discount} onChange={(e) => setDiscount(e.target.value)} /></div>
+          <div>
+            <label className="label">Discount</label>
+            <input
+              ref={discountRef}
+              className="input"
+              type="number"
+              value={discount}
+              onChange={(e) => setDiscount(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); payAmountRef.current?.focus(); } }}
+            />
+          </div>
 
           <div>
             <div className="flex items-center justify-between">
@@ -410,7 +582,15 @@ export default function POS() {
                     <option value="bkash">bKash</option><option value="nagad">Nagad</option>
                     <option value="rocket">Rocket</option><option value="card">Card</option>
                   </select>
-                  <input className="input" type="number" placeholder={i === 0 ? String(total) : '0'} value={p.amount} onChange={(e) => setPaymentRow(i, 'amount', e.target.value)} />
+                  <input
+                    ref={i === 0 ? payAmountRef : null}
+                    className="input"
+                    type="number"
+                    placeholder={i === 0 ? String(total) : '0'}
+                    value={p.amount}
+                    onChange={(e) => setPaymentRow(i, 'amount', e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); checkoutRef.current?.focus(); } }}
+                  />
                   <button type="button" className="btn-ghost p-1.5 shrink-0" title="Fill remaining" onClick={() => fillRemaining(i)}>=</button>
                   {payments.length > 1 && <button type="button" className="text-red-500 p-1 shrink-0" onClick={() => removePaymentRow(i)}><Trash2 size={14} /></button>}
                 </div>
@@ -426,7 +606,7 @@ export default function POS() {
           <div className="flex justify-between text-red-500"><span>Due</span><span>{taka(due)}</span></div>
           <div className="grid grid-cols-2 gap-2 mt-2">
             <button className="btn-ghost" onClick={holdCart}><PauseCircle size={16} /> Hold</button>
-            <button className="btn-primary" onClick={checkout}>Complete Sale</button>
+            <button ref={checkoutRef} className="btn-primary focus:ring-2 focus:ring-brand-500" onClick={checkout}>Complete Sale</button>
           </div>
           {lastSale && (
             <button className="btn-ghost w-full" onClick={() => setShowPrint(true)}><Printer size={16} /> Reprint last invoice</button>
@@ -512,8 +692,9 @@ export default function POS() {
         )}
       </Modal>
 
-      {/* Print preview */}
-      <PrintWrapper open={showPrint} onClose={() => setShowPrint(false)} title="Invoice">
+      {/* Print preview — closing it returns focus to the search box so the next
+          sale can start straight from the keyboard. */}
+      <PrintWrapper open={showPrint} onClose={() => { setShowPrint(false); setTimeout(() => searchRef.current?.focus(), 0); }} title="Invoice">
         <ThermalReceipt sale={lastSale} business={business} />
       </PrintWrapper>
     </div>
