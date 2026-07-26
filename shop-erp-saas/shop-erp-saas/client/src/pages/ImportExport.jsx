@@ -267,6 +267,7 @@ export default function ImportExport() {
           This automatically detects supplier/dealer groupings and column names (Item/Name, Category, Stock/Qty, Supplier/Dealer, prices, IMEIs, warranty)
           instead of requiring you to reformat it into a fixed template first. If a product model already exists here, only its IMEIs are added;
           otherwise the product is created fresh from that row.
+          <b> Only the product name is required</b> — a single column of names (even with no header row) imports fine, and everything else can be filled in later from Edit Product.
         </p>
         <div className="flex flex-wrap items-end gap-3">
           <button className="btn-ghost" onClick={() => downloadTemplate('migration')}><FileText size={16} /> Download Migration Template</button>
@@ -285,6 +286,18 @@ export default function ImportExport() {
               {smartResult.errorCount > 0 && <span className="flex items-center gap-1 text-red-500"><AlertTriangle size={15} /> {smartResult.errorCount} skipped</span>}
               <span className="text-slate-400">of {smartResult.total} row(s)</span>
             </div>
+            {/* what the parser made of each column — so a wrong guess is caught before importing */}
+            {smartResult.columnMap && Object.keys(smartResult.columnMap).length > 0 && (
+              <p className="text-xs text-slate-500">
+                Columns read: {Object.entries(smartResult.columnMap).map(([field, header]) => `${field} ← "${header}"`).join(', ')}
+                {smartResult.ignoredColumns?.length > 0 && <span className="text-slate-400"> · ignored: {smartResult.ignoredColumns.join(', ')}</span>}
+              </p>
+            )}
+            {smartResult.assumedNameColumn && (
+              <p className="text-xs text-amber-600 flex items-center gap-1">
+                <AlertTriangle size={13} /> No recognizable product-name column, so the first column ("{smartResult.assumedNameColumn}") was used as the product name — check the rows below before importing.
+              </p>
+            )}
             {smartResult.suppliers.length > 0 && (
               <p className="text-xs text-slate-500">Suppliers/dealers found: {smartResult.suppliers.join(', ')}</p>
             )}

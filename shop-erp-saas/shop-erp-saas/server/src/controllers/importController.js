@@ -204,6 +204,7 @@ function normalizeSmartRow(row) {
       sku: String(row.sku || '').trim(),
       purchasePrice: Math.max(0, num(row.purchasePrice, 0)),
       sellingPrice: Math.max(0, num(row.sellingPrice, 0)),
+      discountPercent: Math.min(100, Math.max(0, num(row.discountPercent, 0))),
       brand: String(row.brand || '').trim(),
       storage: String(row.storage || '').trim(),
       color: String(row.color || '').trim(),
@@ -246,13 +247,13 @@ async function classifyRows(req, valid) {
 
 function runSmartValidation(req) {
   if (!req.file) throw new ApiError(400, 'No file uploaded');
-  const { rows, format } = parseUploadedFile(req.file.buffer, req.file.originalname);
-  if (!rows.length) throw new ApiError(400, 'Could not find any product rows in this file — check it has a Name/Item column');
+  const { rows, format, info = {} } = parseUploadedFile(req.file.buffer, req.file.originalname);
+  if (!rows.length) throw new ApiError(400, 'Could not read any product rows from this file. The product name is the only thing required — a single column of names is enough.');
   const results = rows.map(normalizeSmartRow);
   const errors = [];
   const valid = [];
   results.forEach((r, i) => { if (r.ok) valid.push(r.data); else errors.push({ row: i + 2, message: r.message }); });
-  return { format, total: rows.length, valid, errors };
+  return { format, total: rows.length, valid, errors, info };
 }
 
 // @route POST /api/import/smart/preview  (multipart, field: file)
@@ -262,7 +263,7 @@ function runSmartValidation(req) {
 // Every row is classified as new / existing (IMEIs only) / conflict, so the
 // owner can review and accept or decline each one before committing.
 export const smartImportPreview = asyncHandler(async (req, res) => {
-  const { format, total, valid, errors } = runSmartValidation(req);
+  const { format, total, valid, errors, info } = runSmartValidation(req);
   const suppliers = [...new Set(valid.map((v) => v.supplierName).filter(Boolean))].sort();
   const withPrices = valid.some((v) => v.purchasePrice > 0 || v.sellingPrice > 0);
   const business = await Business.findById(req.businessId);
@@ -272,6 +273,11 @@ export const smartImportPreview = asyncHandler(async (req, res) => {
     errors: errors.slice(0, 200), suppliers, withPrices, rows,
     conflictCount: rows.filter((r) => r.status === 'conflict').length,
     defaultTrackSerial: business?.type === 'mobile',
+    // what the parser made of the file's columns — lets the owner confirm the
+    // mapping (and see when the name column had to be guessed) before importing
+    columnMap: info.columnMap || {},
+    assumedNameColumn: info.assumedNameColumn || null,
+    ignoredColumns: info.ignoredColumns || [],
   });
 });
 
@@ -327,7 +333,7 @@ export const smartImportCommit = asyncHandler(async (req, res) => {
       product = await Product.create({
         business: req.businessId, name: data.name, category: data.category,
         stock: data.imeis.length ? 0 : data.stock, // synced from real units below when IMEIs are given
-        purchasePrice: data.purchasePrice, sellingPrice: data.sellingPrice,
+        purchasePrice: data.purchasePrice, sellingPrice: data.sellingPrice, discountPercent: data.discountPercent,
         barcode: data.barcode || undefined, sku: data.sku,
         brand: data.brand, storage: data.storage, color: data.color,
         warrantyBrandMonths: data.warrantyBrandMonths, warrantyShopMonths: data.warrantyShopMonths,

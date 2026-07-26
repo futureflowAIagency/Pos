@@ -15,9 +15,10 @@ export function toCSV(rows, columns) {
   return [header, ...lines].join('\r\n');
 }
 
-// Robust CSV parser (handles quoted fields with embedded commas/newlines/escaped quotes).
-// Returns an array of objects keyed by the header row; blank trailing rows dropped.
-export function parseCSV(text) {
+// Robust CSV reader (handles quoted fields with embedded commas/newlines/escaped
+// quotes). Returns the raw grid — array of rows, each an array of cell strings.
+// Used directly when the caller can't assume the first line is a header row.
+export function parseCSVRows(text) {
   const clean = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const rows = [];
   let row = [];
@@ -41,7 +42,12 @@ export function parseCSV(text) {
     }
   }
   if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
 
+// Same parser, keyed by the header row: array of objects. Blank rows dropped.
+export function parseCSV(text) {
+  const rows = parseCSVRows(text);
   if (!rows.length) return [];
   const headers = rows[0].map((h) => h.trim());
   return rows
