@@ -74,7 +74,7 @@ const run = async () => {
     address: 'Dhaka', totalPurchase: 5000, totalPaid: 3000,
   });
 
-  // ---- Demo Mobile Shop (Business Type = Mobile Shop Management) ----
+  // ---- Demo Mobile Shop (Business Type = Technology Management System) ----
   const mobileOwner = await User.create({
     name: 'Mobile Owner', email: 'mobile@demo.com', password: 'owner123', role: 'owner',
   });

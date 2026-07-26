@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok } from '../utils/apiResponse.js';
@@ -132,6 +133,39 @@ export const resetOwnerPassword = asyncHandler(async (req, res) => {
   await owner.save();
 
   ok(res, { tempPassword, owner: publicUser(owner) }, 'Password reset — share this with the owner now, it will not be shown again');
+});
+
+// @route DELETE /api/admin/businesses/:id
+// Permanently removes a customer from the platform: the owner login, every staff
+// login under that shop, the business itself, and all of its data. Irreversible —
+// the UI makes the superadmin type the business name before this can be called.
+// Deactivating (PATCH .../toggle) remains the reversible option.
+export const deleteBusiness = asyncHandler(async (req, res) => {
+  const business = await Business.findById(req.params.id);
+  if (!business) throw new ApiError(404, 'Business not found');
+
+  const users = await User.find({ business: business._id });
+  // a superadmin account must never be removable through the tenant list
+  if (users.some((u) => u.role === 'superadmin') || String(business.owner) === String(req.user._id)) {
+    throw new ApiError(400, 'This account cannot be deleted from here');
+  }
+
+  // Wipe every business-scoped collection. Driving this off the model registry
+  // (any schema with a `business` path) means a model added later is covered
+  // automatically instead of silently leaving orphaned rows behind.
+  const deleted = {};
+  for (const name of mongoose.modelNames()) {
+    if (name === 'Business') continue;
+    const Model = mongoose.model(name);
+    if (!Model.schema.path('business')) continue;
+    const { deletedCount } = await Model.deleteMany({ business: business._id });
+    if (deletedCount) deleted[name] = deletedCount;
+  }
+  // the owner may predate the `business` back-reference — remove them explicitly too
+  await User.deleteMany({ _id: business.owner, role: { $ne: 'superadmin' } });
+  await Business.deleteOne({ _id: business._id });
+
+  ok(res, { deleted, business: business.name }, `${business.name} and its data were deleted`);
 });
 
 // @route PATCH /api/admin/businesses/:id/toggle  (enable/disable owner)

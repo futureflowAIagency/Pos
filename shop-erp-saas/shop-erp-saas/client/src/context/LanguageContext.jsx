@@ -127,7 +127,7 @@ const bn = {
   Daily: 'দৈনিক', Monthly: 'মাসিক', 'EMI / Installment': 'ইএমআই / কিস্তি', SMS: 'এসএমএস',
   Female: 'মহিলা', Male: 'পুরুষ', Festive: 'উৎসব', Friendly: 'বন্ধুত্বপূর্ণ', Professional: 'পেশাদার',
   Urgent: 'জরুরি', General: 'সাধারণ', 'General Shop': 'সাধারণ দোকান',
-  'Mobile Shop Management': 'মোবাইল শপ ম্যানেজমেন্ট', Pharmacy: 'ফার্মেসি', Other: 'অন্যান্য',
+  'Technology Management System': 'টেকনোলজি ম্যানেজমেন্ট সিস্টেম', Pharmacy: 'ফার্মেসি', Other: 'অন্যান্য',
   Rent: 'ভাড়া', Salary: 'বেতন', Utility: 'ইউটিলিটি', Purchase: 'ক্রয়', Cash: 'নগদ', Card: 'কার্ড',
   'Walk-in': 'ওয়াক-ইন', Select: 'নির্বাচন করুন', 'Thermal (80mm)': 'থার্মাল (৮০মিমি)',
   'Thermal 80mm': 'থার্মাল ৮০মিমি', 'Generic HTTP API': 'জেনেরিক HTTP API',

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Building2, Users, Clock, BadgeCheck, Check, X, UserPlus, KeyRound, Copy } from 'lucide-react';
+import { Building2, Users, Clock, BadgeCheck, Check, X, UserPlus, KeyRound, Copy, Trash2, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api/axios.js';
 import StatCard from '../../components/ui/StatCard.jsx';
@@ -28,6 +28,10 @@ export default function AdminPanel() {
   const [savingPlan, setSavingPlan] = useState(false);
   const [resetResult, setResetResult] = useState(null); // { ownerName, tempPassword } — shown once
   const [resetting, setResetting] = useState(false);
+  // permanent user/shop deletion — the name must be typed to arm the button
+  const [deleteBiz, setDeleteBiz] = useState(null);
+  const [deleteText, setDeleteText] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   const load = async () => {
     const [o, p, b] = await Promise.all([
@@ -91,6 +95,21 @@ export default function AdminPanel() {
       setResetResult({ ownerName: r.owner?.name || 'Owner', tempPassword: data.data.tempPassword });
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
     setResetting(false);
+  };
+
+  // Deletion is irreversible and takes the shop's whole dataset with it, so the
+  // superadmin has to type the business name — a plain confirm is too easy to
+  // click through. Deactivate stays the reversible option.
+  const runDelete = async () => {
+    if (!deleteBiz) return;
+    if (deleteText.trim() !== deleteBiz.name) return toast.error('Type the business name exactly to confirm');
+    setDeleting(true);
+    try {
+      await api.delete(`/admin/businesses/${deleteBiz._id}`);
+      toast.success(`${deleteBiz.name} deleted`);
+      setDeleteBiz(null); setDeleteText(''); load();
+    } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
+    setDeleting(false);
   };
 
   const createOwner = async () => {
@@ -206,6 +225,7 @@ export default function AdminPanel() {
                   <button onClick={() => openPlan(r)} className="btn-ghost text-xs">Set Price</button>
                   <button onClick={() => toggleOwner(r)} className="btn-ghost text-xs">{r.owner?.isActive !== false ? 'Deactivate' : 'Activate'}</button>
                   <button onClick={() => resetPassword(r)} disabled={resetting} className="btn-ghost text-xs" title="Issue a new temporary password"><KeyRound size={13} className="inline mr-1" />Reset Password</button>
+                  <button onClick={() => { setDeleteBiz(r); setDeleteText(''); }} className="btn-ghost text-xs text-red-500" title="Delete this user and shop permanently"><Trash2 size={13} className="inline mr-1" />Delete</button>
                 </div>
               )},
             ]}
@@ -229,8 +249,40 @@ export default function AdminPanel() {
             <select className="input" value={ownerForm.businessType} onChange={setO('businessType')}>
               <option value="general">General Shop</option>
               <option value="pharmacy">Pharmacy</option>
-              <option value="mobile">Mobile Shop Management</option>
+              <option value="mobile">Technology Management System</option>
             </select>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Delete user + shop (permanent) */}
+      <Modal open={!!deleteBiz} onClose={() => { setDeleteBiz(null); setDeleteText(''); }} title="Delete user & shop"
+        footer={<>
+          <button className="btn-ghost" onClick={() => { setDeleteBiz(null); setDeleteText(''); }}>Cancel</button>
+          <button
+            className="btn-primary !bg-red-600 hover:!bg-red-700 disabled:opacity-50"
+            disabled={deleting || deleteText.trim() !== (deleteBiz?.name || '')}
+            onClick={runDelete}
+          >{deleting ? 'Deleting...' : 'Delete permanently'}</button>
+        </>}>
+        <div className="space-y-3 text-sm">
+          <p className="flex items-start gap-2 text-red-600">
+            <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+            <span>
+              This permanently deletes <b>{deleteBiz?.owner?.name || 'the owner'}</b> ({deleteBiz?.owner?.email || 'no email'}),
+              any staff logins under this shop, and <b>{deleteBiz?.name}</b> with all of its data — products, sales, customers,
+              suppliers, dues and reports. It cannot be undone.
+            </span>
+          </p>
+          <p className="text-slate-500">
+            To block the login without losing anything, use <b>Deactivate</b> instead.
+          </p>
+          <div>
+            <label className="label">Type <b>{deleteBiz?.name}</b> to confirm</label>
+            <input className="input" value={deleteText} autoFocus
+              onChange={(e) => setDeleteText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && deleteText.trim() === deleteBiz?.name) runDelete(); }}
+              placeholder={deleteBiz?.name} />
           </div>
         </div>
       </Modal>

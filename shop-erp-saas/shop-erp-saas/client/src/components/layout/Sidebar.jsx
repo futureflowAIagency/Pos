@@ -27,7 +27,7 @@ const baseLinks = [
   { to: '/settings', key: 'settings', label: 'Settings', icon: Settings },
 ];
 
-// Extra modules enabled only for Mobile Shop Management businesses.
+// Extra modules enabled only for Technology Management System businesses.
 const mobileLinks = [
   { to: '/warranty', key: 'warranty', label: 'Warranty Check', icon: ShieldQuestion },
   { to: '/installments', key: 'installments', label: 'EMI / Installments', icon: CalendarClock },
