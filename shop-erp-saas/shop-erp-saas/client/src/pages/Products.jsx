@@ -26,6 +26,8 @@ const emptyPurchase = { reference: '', note: '', paid: 0, source: 'cash' };
 const isMedicineCat = (cat) => /medicine|medicin|drug|pharma/i.test(cat || '');
 const toDateInput = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
 const discounted = (p) => Math.round((p.sellingPrice * (1 - (p.discountPercent || 0) / 100)) * 100) / 100;
+// how many matches the search price panel shows before falling back to the table
+const PRICE_CARDS = 6;
 
 export default function Products() {
   const confirm = useConfirm();
@@ -291,6 +293,51 @@ export default function Products() {
           </div>
         )}
       </div>
+
+      {/* Price panel — searching by name puts the buy/sell price right at the top,
+          big enough to read at the counter without scanning across the table
+          (and without scrolling sideways on a phone). Click a card to edit. */}
+      {search.trim() && products.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-slate-400">
+            Price for “{search.trim()}” — {products.length} match{products.length > 1 ? 'es' : ''}{products.length > PRICE_CARDS ? `, showing first ${PRICE_CARDS}` : ''}
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+            {products.slice(0, PRICE_CARDS).map((p) => (
+              <button key={p._id} onClick={() => openEdit(p)} className="card p-3 text-left hover:ring-2 hover:ring-brand-500 transition">
+                <p className="font-medium truncate">{p.name}</p>
+                <p className="text-xs text-slate-400 truncate">
+                  {[isMobile && variantLabel(p), p.category, p.supplier?.name].filter(Boolean).join(' • ')}
+                </p>
+                <div className="flex items-end justify-between gap-2 mt-2">
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wide text-slate-400">Buy</p>
+                    <p className="font-semibold">{taka(p.purchasePrice)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wide text-slate-400">Sell</p>
+                    <p className="text-lg font-bold text-brand-600">{taka(discounted(p))}</p>
+                    {p.discountPercent > 0 && (
+                      <p className="text-[11px] text-slate-400 line-through">{taka(p.sellingPrice)}</p>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-400">Stock</p>
+                    <p className={`font-semibold ${p.stock <= p.lowStockAlert ? 'text-red-500' : ''}`}>{p.stock} {p.unit}</p>
+                  </div>
+                </div>
+                {/* imported stock often has no price yet — say so instead of a bare ৳0 */}
+                {!p.purchasePrice && !p.sellingPrice && (
+                  <p className="text-[11px] text-amber-600 mt-1.5">Price not set yet — click to add it</p>
+                )}
+                {p.sellingPrice > 0 && p.purchasePrice > 0 && (
+                  <p className="text-[11px] text-slate-400 mt-1.5">Profit {taka(discounted(p) - p.purchasePrice)} per {p.unit}</p>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <DataTable columns={columns} rows={products} />
       {/* shared combobox options for the Category field (Edit form + create Item blocks) */}
