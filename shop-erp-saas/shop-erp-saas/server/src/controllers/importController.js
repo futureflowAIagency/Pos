@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok } from '../utils/apiResponse.js';
@@ -16,7 +17,6 @@ import Business from '../models/Business.js';
 const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
 const toBool = (v) => ['true', '1', 'yes', 'y'].includes(String(v ?? '').trim().toLowerCase());
 const num = (v, def) => { const n = Number(v); return Number.isFinite(n) ? n : def; };
-const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // header row + one example row — lets a shop owner migrating from another
 // system know exactly which columns to fill in (req 13 "নির্ধারিত Template").
@@ -215,6 +215,26 @@ function normalizeSmartRow(row) {
   };
 }
 
+// A migration file routinely has 500+ rows (this client's own legacy exports are
+// 552 and 460 items). Looking each one up with its own query meant 500+ sequential
+// round-trips to the remote Atlas cluster — slow enough that the upload timed out
+// before finishing. Every lookup below is therefore done ONCE, in bulk, and matched
+// in memory: the product identity key is name+category, both case-insensitive.
+const productKey = (name, category) =>
+  `${String(name || '').trim().toLowerCase()}::${String(category || '').trim().toLowerCase()}`;
+
+// name+category -> { _id, name } for every product in this business (one query)
+async function loadProductIndex(req) {
+  const all = await Product.find(tenantFilter(req, {})).select('name category isActive').lean();
+  const byKey = new Map();
+  for (const p of all) {
+    const k = productKey(p.name, p.category);
+    // an active product always wins over a soft-deleted one with the same name
+    if (!byKey.has(k) || (p.isActive && !byKey.get(k).isActive)) byKey.set(k, p);
+  }
+  return byKey;
+}
+
 // Classifies each valid row as: 'new' (no product with this name+category yet —
 // will be created from this row's data), 'existing' (a matching product already
 // exists — per the client's instruction, ONLY its IMEIs get added, nothing else
@@ -223,26 +243,24 @@ function normalizeSmartRow(row) {
 // the owner must explicitly tick them to proceed, everything else defaults to accepted.
 async function classifyRows(req, valid) {
   const allImeis = [...new Set(valid.flatMap((v) => v.imeis))];
+  const imeiSet = new Set(allImeis);
   const existingUnits = allImeis.length
     ? await PhoneUnit.find(tenantFilter(req, { $or: [{ imei1: { $in: allImeis } }, { imei2: { $in: allImeis } }, { serial: { $in: allImeis } }] })).populate('product', 'name')
     : [];
   const imeiOwner = new Map(); // imei/serial -> owning product's name
   for (const u of existingUnits) {
     for (const code of [u.imei1, u.imei2, u.serial]) {
-      if (code && allImeis.includes(code)) imeiOwner.set(code, u.product?.name || 'another product');
+      if (code && imeiSet.has(code)) imeiOwner.set(code, u.product?.name || 'another product');
     }
   }
 
-  const rows = [];
-  for (const data of valid) {
-    const existingProduct = await Product.findOne(tenantFilter(req, {
-      name: { $regex: `^${escapeRegex(data.name)}$`, $options: 'i' }, category: data.category,
-    }));
+  const byKey = await loadProductIndex(req);
+  return valid.map((data) => {
+    const existingProduct = byKey.get(productKey(data.name, data.category)) || null;
     const conflicts = data.imeis.filter((code) => imeiOwner.has(code)).map((code) => ({ imei: code, existingProduct: imeiOwner.get(code) }));
     const status = conflicts.length ? 'conflict' : existingProduct ? 'existing' : 'new';
-    rows.push({ data, status, matchedProductName: existingProduct?.name || null, conflicts, accepted: status !== 'conflict' });
-  }
-  return rows;
+    return { data, status, matchedProductName: existingProduct?.name || null, conflicts, accepted: status !== 'conflict' };
+  });
 }
 
 function runSmartValidation(req) {
@@ -295,7 +313,6 @@ export const smartImportCommit = asyncHandler(async (req, res) => {
   let skipRows = new Set();
   try { skipRows = new Set(JSON.parse(req.body.skipRows || '[]').map(Number)); } catch { /* malformed — treat as none skipped */ }
 
-  const supplierCache = new Map();
   let createdProducts = 0, existingProductsGivenImeis = 0, createdSuppliers = 0, addedUnits = 0, skippedDuplicateImeis = 0;
 
   // Mobile shops track every device by IMEI/serial individually — match the
@@ -304,54 +321,89 @@ export const smartImportCommit = asyncHandler(async (req, res) => {
   const business = await Business.findById(req.businessId);
   const defaultTrackSerial = business?.type === 'mobile';
 
-  for (let i = 0; i < valid.length; i++) {
-    if (skipRows.has(i)) continue;
-    const data = valid[i];
+  const rows = valid.filter((_, i) => !skipRows.has(i));
 
-    let supplierDoc = null;
-    if (data.supplierName) {
-      const key = data.supplierName.toLowerCase();
-      if (supplierCache.has(key)) {
-        supplierDoc = supplierCache.get(key);
-      } else {
-        supplierDoc = await Supplier.findOne(tenantFilter(req, { name: { $regex: `^${escapeRegex(data.supplierName)}$`, $options: 'i' } }));
-        if (!supplierDoc) {
-          supplierDoc = await Supplier.create({ business: req.businessId, name: data.supplierName });
-          createdSuppliers++;
-        }
-        supplierCache.set(key, supplierDoc);
-      }
+  // ---- suppliers: one read + one bulk insert for the whole file ----
+  const supplierByName = new Map(); // lowercased name -> _id
+  const wantedSuppliers = [...new Map(
+    rows.map((r) => r.supplierName.trim()).filter(Boolean).map((n) => [n.toLowerCase(), n])
+  ).values()];
+  if (wantedSuppliers.length) {
+    const existing = await Supplier.find(tenantFilter(req, {})).select('name').lean();
+    for (const s of existing) supplierByName.set(String(s.name || '').trim().toLowerCase(), s._id);
+    const missing = wantedSuppliers.filter((n) => !supplierByName.has(n.toLowerCase()));
+    if (missing.length) {
+      const made = await Supplier.insertMany(missing.map((name) => ({ business: req.businessId, name })));
+      for (const s of made) supplierByName.set(String(s.name || '').trim().toLowerCase(), s._id);
+      createdSuppliers = made.length;
     }
+  }
 
-    let product = await Product.findOne(tenantFilter(req, {
-      name: { $regex: `^${escapeRegex(data.name)}$`, $options: 'i' }, category: data.category,
-    }));
+  // ---- products: one read + one bulk insert ----
+  const productIndex = await loadProductIndex(req);
+  const productIdByKey = new Map();
+  for (const [k, p] of productIndex) productIdByKey.set(k, p._id);
 
-    if (product) {
-      existingProductsGivenImeis++;
-    } else {
-      product = await Product.create({
-        business: req.businessId, name: data.name, category: data.category,
-        stock: data.imeis.length ? 0 : data.stock, // synced from real units below when IMEIs are given
-        purchasePrice: data.purchasePrice, sellingPrice: data.sellingPrice, discountPercent: data.discountPercent,
-        barcode: data.barcode || undefined, sku: data.sku,
-        brand: data.brand, storage: data.storage, color: data.color,
-        warrantyBrandMonths: data.warrantyBrandMonths, warrantyShopMonths: data.warrantyShopMonths,
-        supplier: supplierDoc?._id || null,
-        trackSerial: data.imeis.length > 0 || defaultTrackSerial,
-      });
-      createdProducts++;
-    }
+  const newDocs = new Map(); // key -> doc (dedupes rows repeating the same product)
+  for (const data of rows) {
+    const k = productKey(data.name, data.category);
+    if (productIdByKey.has(k)) { existingProductsGivenImeis++; continue; } // its own fields are never touched
+    if (newDocs.has(k)) continue;
+    newDocs.set(k, {
+      business: req.businessId, name: data.name, category: data.category,
+      stock: data.imeis.length ? 0 : data.stock, // synced from real units below when IMEIs are given
+      purchasePrice: data.purchasePrice, sellingPrice: data.sellingPrice, discountPercent: data.discountPercent,
+      barcode: data.barcode || undefined, sku: data.sku,
+      brand: data.brand, storage: data.storage, color: data.color,
+      warrantyBrandMonths: data.warrantyBrandMonths, warrantyShopMonths: data.warrantyShopMonths,
+      supplier: supplierByName.get(data.supplierName.trim().toLowerCase()) || null,
+      trackSerial: data.imeis.length > 0 || defaultTrackSerial,
+    });
+  }
+  if (newDocs.size) {
+    const made = await Product.insertMany([...newDocs.values()]);
+    for (const p of made) productIdByKey.set(productKey(p.name, p.category), p._id);
+    createdProducts = made.length;
+  }
 
-    if (data.imeis.length) {
+  // ---- IMEI units: one clash read + one bulk insert + one stock resync ----
+  const imeiRows = rows.filter((r) => r.imeis.length);
+  if (imeiRows.length) {
+    const allCodes = [...new Set(imeiRows.flatMap((r) => r.imeis))];
+    const clashes = await PhoneUnit.find(tenantFilter(req, {
+      $or: [{ imei1: { $in: allCodes } }, { imei2: { $in: allCodes } }, { serial: { $in: allCodes } }],
+    })).select('imei1 imei2 serial').lean();
+    const taken = new Set();
+    for (const u of clashes) for (const c of [u.imei1, u.imei2, u.serial]) if (c) taken.add(c);
+
+    const unitDocs = [];
+    for (const data of imeiRows) {
+      const productId = productIdByKey.get(productKey(data.name, data.category));
+      if (!productId) continue;
       for (const code of data.imeis) {
-        const clash = await PhoneUnit.findOne(tenantFilter(req, { $or: [{ imei1: code }, { imei2: code }, { serial: code }] }));
-        if (clash) { skippedDuplicateImeis++; continue; } // already flagged during preview; re-checked defensively
-        await PhoneUnit.create({ business: req.businessId, product: product._id, imei1: code, status: 'in_stock' });
-        addedUnits++;
+        // already flagged during preview; re-checked here so an accepted conflict
+        // row only skips the codes truly taken, and repeats inside the file collapse
+        if (taken.has(code)) { skippedDuplicateImeis++; continue; }
+        taken.add(code);
+        unitDocs.push({ business: req.businessId, product: productId, imei1: code, status: 'in_stock' });
       }
-      const inStock = await PhoneUnit.countDocuments(tenantFilter(req, { product: product._id, status: 'in_stock' }));
-      await Product.updateOne(tenantFilter(req, { _id: product._id }), { stock: inStock, trackSerial: true });
+    }
+    if (unitDocs.length) {
+      await PhoneUnit.insertMany(unitDocs);
+      addedUnits = unitDocs.length;
+      const touched = [...new Set(unitDocs.map((u) => String(u.product)))].map((id) => new mongoose.Types.ObjectId(id));
+      const counts = await PhoneUnit.aggregate([
+        { $match: { business: new mongoose.Types.ObjectId(req.businessId), product: { $in: touched }, status: 'in_stock' } },
+        { $group: { _id: '$product', n: { $sum: 1 } } },
+      ]);
+      if (counts.length) {
+        await Product.bulkWrite(counts.map((c) => ({
+          updateOne: {
+            filter: { _id: c._id, business: new mongoose.Types.ObjectId(req.businessId) },
+            update: { $set: { stock: c.n, trackSerial: true } },
+          },
+        })));
+      }
     }
   }
 

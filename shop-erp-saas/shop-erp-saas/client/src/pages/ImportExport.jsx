@@ -135,6 +135,17 @@ export default function ImportExport() {
     setUnitBusy(false);
   };
 
+  // A gateway timeout / proxy error returns HTML, not our JSON — without this the
+  // toast would blame the file ("could not read this file") for a server-side stall.
+  const uploadError = (e, fallback) => {
+    const msg = e.response?.data?.message;
+    if (typeof msg === 'string' && msg) return msg;
+    const status = e.response?.status;
+    if (status === 504 || status === 502) return `The server took too long to process this file (${status}). Try again, or split the file into smaller parts.`;
+    if (!e.response) return 'Could not reach the server — check the connection and try again.';
+    return `${fallback} (error ${status})`;
+  };
+
   const smartPreview = async () => {
     if (!smartFile) return toast.error('Choose a file first');
     setSmartBusy(true); setSmartResult(null);
@@ -146,7 +157,7 @@ export default function ImportExport() {
       const initial = {};
       data.data.rows.forEach((r, i) => { initial[i] = r.accepted; });
       setSmartRowAccept(initial);
-    } catch (e) { toast.error(e.response?.data?.message || 'Could not read this file'); }
+    } catch (e) { toast.error(uploadError(e, 'Could not read this file')); }
     setSmartBusy(false);
   };
   const toggleSmartRow = (i) => setSmartRowAccept((m) => ({ ...m, [i]: !m[i] }));
@@ -168,7 +179,7 @@ export default function ImportExport() {
       );
       setSmartFile(null); setSmartResult(null); setSmartRowAccept({});
       loadHistory();
-    } catch (e) { toast.error(e.response?.data?.message || 'Import failed'); }
+    } catch (e) { toast.error(uploadError(e, 'Import failed')); }
     setSmartBusy(false);
   };
 
