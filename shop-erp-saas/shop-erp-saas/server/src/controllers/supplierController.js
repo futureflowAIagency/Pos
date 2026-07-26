@@ -115,6 +115,50 @@ export const paySupplier = asyncHandler(async (req, res) => {
   ok(res, { payment, supplier }, 'Payment recorded');
 });
 
+// @route PATCH /api/suppliers/:id/due  body: { due, note }
+// Sets the supplier's outstanding due to an exact figure. This is a CORRECTION,
+// not a payment: `totalPaid` (real money that actually left the shop) is never
+// touched — `totalPurchase` is moved to `totalPaid + due` so the due virtual
+// lands exactly on the requested number. The signed difference is written to the
+// ledger as a `kind:'adjustment'` entry with `paid: 0`, so the change is
+// auditable while leaving the balance engine and the purchase reports alone.
+// Used for opening balances carried over from an old system, or fixing a
+// mistyped purchase — money actually paid still goes through /pay.
+export const adjustSupplierDue = asyncHandler(async (req, res) => {
+  const { due, note = '' } = req.body;
+  const target = Number(due);
+  if (!Number.isFinite(target) || target < 0) throw new ApiError(400, 'Enter a valid due amount (0 or more)');
+
+  const supplier = await Supplier.findOne(tenantFilter(req, { _id: req.params.id }));
+  if (!supplier) throw new ApiError(404, 'Supplier not found');
+
+  const previousDue = Math.max(0, (supplier.totalPurchase || 0) - (supplier.totalPaid || 0));
+  const newTotalPurchase = (supplier.totalPaid || 0) + target;
+  const delta = newTotalPurchase - (supplier.totalPurchase || 0);
+  if (delta === 0) return ok(res, { supplier }, 'Due is already this amount');
+
+  const adjustment = await Purchase.create({
+    business: req.businessId,
+    supplier: supplier._id,
+    kind: 'adjustment',
+    note: note || `Due corrected from ${previousDue} to ${target}`,
+    items: [],
+    total: delta, // signed: positive raises the due, negative lowers it
+    paid: 0,      // no money moved — keeps balances/reports untouched
+    due: delta,
+    createdBy: req.user._id,
+  });
+
+  supplier.totalPurchase = newTotalPurchase;
+  await supplier.save();
+
+  await logActivity(req, {
+    action: 'ADJUST_SUPPLIER_DUE', entity: 'Supplier', entityId: supplier._id,
+    meta: { previousDue, newDue: target, delta },
+  });
+  ok(res, { adjustment, supplier }, 'Due updated');
+});
+
 // @route GET /api/suppliers/:id/products — per-product breakdown for one supplier:
 // how much of each product was bought from them, how many have sold (shop-wide,
 // since a sale doesn't record which supplier a unit came from), and live stock.

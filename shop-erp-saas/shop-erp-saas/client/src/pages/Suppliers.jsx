@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Pencil, Trash2, Search, Wallet, PackagePlus, ScrollText, Printer, TrendingUp, TrendingDown, AlertTriangle, Boxes } from 'lucide-react';
+import { Plus, Pencil, PencilLine, Trash2, Search, Wallet, PackagePlus, ScrollText, Printer, TrendingUp, TrendingDown, AlertTriangle, Boxes } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
@@ -34,6 +34,7 @@ export default function Suppliers() {
   // purchase / payment / ledger sub-modals
   const [purchaseFor, setPurchaseFor] = useState(null);
   const [payFor, setPayFor] = useState(null);
+  const [dueFor, setDueFor] = useState(null); // direct due correction
   const [ledgerFor, setLedgerFor] = useState(null);
   const [productsFor, setProductsFor] = useState(null);
 
@@ -133,6 +134,7 @@ export default function Suppliers() {
             <div className="flex justify-end gap-1">
               <button onClick={() => setPurchaseFor(r)} className="btn-ghost p-1.5" title="Record purchase"><PackagePlus size={15} /></button>
               <button onClick={() => setPayFor(r)} className="btn-ghost p-1.5" title="Pay due"><Wallet size={15} /></button>
+              <button onClick={() => setDueFor(r)} className="btn-ghost p-1.5" title="Edit due directly (correction, not a payment)"><PencilLine size={15} /></button>
               <button onClick={() => setLedgerFor(r)} className="btn-ghost p-1.5" title="Ledger"><ScrollText size={15} /></button>
               <button onClick={() => setProductsFor(r)} className="btn-ghost p-1.5" title="Products bought (sold vs remaining)"><Boxes size={15} /></button>
               <button onClick={() => openEdit(r)} className="btn-ghost p-1.5"><Pencil size={15} /></button>
@@ -157,6 +159,7 @@ export default function Suppliers() {
 
       {purchaseFor && <PurchaseModal supplier={purchaseFor} onClose={() => setPurchaseFor(null)} onDone={refreshAll} onPrint={setPrintPurchase} />}
       {payFor && <PayModal supplier={payFor} onClose={() => setPayFor(null)} onDone={refreshAll} />}
+      {dueFor && <EditDueModal supplier={dueFor} onClose={() => setDueFor(null)} onDone={refreshAll} />}
       {ledgerFor && <LedgerModal supplier={ledgerFor} onClose={() => setLedgerFor(null)} onPrint={setPrintPurchase} />}
       {productsFor && <SupplierProductsModal supplier={productsFor} onClose={() => setProductsFor(null)} />}
 
@@ -275,6 +278,62 @@ function PayModal({ supplier, onClose, onDone }) {
   );
 }
 
+// Direct due correction — for an opening balance carried over from an old system
+// or a mistyped purchase. Deliberately separate from "Pay": this moves the due
+// figure only and books NO money, so cash/bank balances stay untouched.
+function EditDueModal({ supplier, onClose, onDone }) {
+  const confirm = useConfirm();
+  const current = Math.max(0, (supplier.totalPurchase || 0) - (supplier.totalPaid || 0));
+  const [amount, setAmount] = useState(String(current));
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const target = Number(amount);
+  const valid = amount !== '' && Number.isFinite(target) && target >= 0;
+  const delta = valid ? target - current : 0;
+
+  const submit = async () => {
+    if (!valid) return toast.error('Enter a valid due amount (0 or more)');
+    const okc = await confirm({
+      title: 'Update due?',
+      message: `Set this supplier's due to ${taka(target)} (currently ${taka(current)})? This is a correction only — no payment is recorded and no balance changes.`,
+      confirmText: 'Update Due', cancelText: 'Cancel',
+    });
+    if (!okc) return;
+    setSaving(true);
+    try {
+      await api.patch(`/suppliers/${supplier._id}/due`, { due: target, note });
+      toast.success('Due updated'); onDone(); onClose();
+    } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
+    setSaving(false);
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`Edit Due — ${supplier.name}`}
+      footer={<><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={saving} onClick={submit}>Update Due</button></>}>
+      <p className="text-sm mb-3">Current due: <strong className="text-red-500">{taka(current)}</strong></p>
+      <div className="space-y-3">
+        <div>
+          <label className="label">New due amount</label>
+          <input className="input" type="number" min="0" value={amount} autoFocus
+            onChange={(e) => setAmount(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') submit(); }} />
+          {valid && delta !== 0 && (
+            <p className={`text-xs mt-1 ${delta > 0 ? 'text-red-500' : 'text-green-600'}`}>
+              {delta > 0 ? `Due increases by ${taka(delta)}` : `Due decreases by ${taka(-delta)}`}
+            </p>
+          )}
+        </div>
+        <div><label className="label">Reason / Note</label><input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. opening balance from old book" /></div>
+        <p className="text-xs text-amber-600 flex items-start gap-1">
+          <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+          This only corrects the due figure — it records no payment, so Cash/Bank balances and the sales reports are unaffected. If money actually changed hands, use <b>Pay due</b> instead. The change is logged in this supplier's ledger.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
 function LedgerModal({ supplier, onClose, onPrint }) {
   const [data, setData] = useState(null);
   useEffect(() => { api.get(`/suppliers/${supplier._id}`).then(({ data }) => setData(data.data)); }, [supplier._id]);
@@ -298,9 +357,18 @@ function LedgerModal({ supplier, onClose, onPrint }) {
                 {data.entries.map((e) => (
                   <tr key={e._id} className="border-t border-slate-100 dark:border-slate-700">
                     <td className="px-3 py-2">{fmtDateTime(e.createdAt)}</td>
-                    <td className="px-3 py-2 capitalize">{e.kind}</td>
+                    <td className="px-3 py-2 capitalize">
+                      {e.kind === 'adjustment'
+                        ? <span className="badge bg-amber-100 text-amber-700">Due correction</span>
+                        : e.kind}
+                    </td>
                     <td className="px-3 py-2">{e.reference || e.note || '—'}</td>
-                    <td className="px-3 py-2 text-right">{taka(e.total)}</td>
+                    <td className="px-3 py-2 text-right">
+                      {/* an adjustment's total is a signed correction, not goods bought */}
+                      {e.kind === 'adjustment'
+                        ? <span className={e.total >= 0 ? 'text-red-500' : 'text-green-600'}>{e.total >= 0 ? '+' : '−'}{taka(Math.abs(e.total))}</span>
+                        : taka(e.total)}
+                    </td>
                     <td className="px-3 py-2 text-right">{taka(e.paid)}</td>
                     <td className="px-3 py-2 text-right">
                       {e.kind === 'purchase' && (

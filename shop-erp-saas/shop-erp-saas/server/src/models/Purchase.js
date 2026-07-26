@@ -24,8 +24,11 @@ const purchaseSchema = new mongoose.Schema(
     due: { type: Number, default: 0 },
     // which balance the `paid` amount came from — feeds the dashboard balance engine (outflow)
     source: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' },
-    // 'purchase' = goods received, 'payment' = a standalone payment against due
-    kind: { type: String, enum: ['purchase', 'payment'], default: 'purchase' },
+    // 'purchase' = goods received, 'payment' = a standalone payment against due,
+    // 'adjustment' = the owner corrected the due directly (no goods, no money —
+    // `total`/`due` hold the signed correction and `paid` stays 0, so reports
+    // (which filter kind:'purchase') and the balance engine are unaffected)
+    kind: { type: String, enum: ['purchase', 'payment', 'adjustment'], default: 'purchase' },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true }
