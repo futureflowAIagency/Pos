@@ -1,7 +1,7 @@
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok } from '../utils/apiResponse.js';
-import { tenantFilter } from '../middleware/tenant.js';
+import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import { toCSV } from '../utils/csv.js';
 import ImportExportLog from '../models/ImportExportLog.js';
@@ -20,6 +20,7 @@ import ServiceJob from '../models/ServiceJob.js';
 import Return from '../models/Return.js';
 import DuePayment from '../models/DuePayment.js';
 import Business from '../models/Business.js';
+import Branch from '../models/Branch.js';
 
 // Optional ?from=&to= date filter, applied to whichever field each entity uses.
 const dateRange = (req) => {
@@ -28,6 +29,14 @@ const dateRange = (req) => {
   if (req.query.to) q.$lte = new Date(req.query.to + 'T23:59:59');
   return Object.keys(q).length ? q : null;
 };
+
+// Branch-scoped entities (Products/Units/Sales/Purchases/Expenses/Installments)
+// default to the active branch; ?allBranches=true (owner/superadmin only)
+// exports across the whole business instead.
+const scoped = (req, extra = {}) =>
+  (req.query.allBranches === 'true' && ['owner', 'superadmin'].includes(req.user.role))
+    ? tenantFilter(req, extra)
+    : branchFilter(req, extra);
 
 // Every exportable entity (req 13): builds { columns, rows } for CSV/JSON output.
 const ENTITY_BUILDERS = {
@@ -48,7 +57,7 @@ const ENTITY_BUILDERS = {
     ],
   }),
   products: async (req) => ({
-    rows: await Product.find(tenantFilter(req)).lean(),
+    rows: await Product.find(scoped(req)).lean(),
     columns: [
       { key: 'name', label: 'Name' }, { key: 'barcode', label: 'Barcode' }, { key: 'sku', label: 'SKU' },
       { key: 'category', label: 'Category' }, { key: 'unit', label: 'Unit' },
@@ -59,7 +68,7 @@ const ENTITY_BUILDERS = {
     ],
   }),
   units: async (req) => ({
-    rows: await PhoneUnit.find(tenantFilter(req)).populate('product', 'name').lean(),
+    rows: await PhoneUnit.find(scoped(req)).populate('product', 'name').lean(),
     columns: [
       { key: 'product', label: 'Product', value: (r) => r.product?.name || '' },
       { key: 'imei1', label: 'IMEI 1' }, { key: 'imei2', label: 'IMEI 2' }, { key: 'serial', label: 'Serial' },
@@ -68,7 +77,7 @@ const ENTITY_BUILDERS = {
   }),
   sales: async (req) => {
     const range = dateRange(req);
-    const q = tenantFilter(req); if (range) q.createdAt = range;
+    const q = scoped(req); if (range) q.createdAt = range;
     return {
       rows: await Sale.find(q).sort('-createdAt').lean(),
       columns: [
@@ -81,7 +90,7 @@ const ENTITY_BUILDERS = {
   },
   purchases: async (req) => {
     const range = dateRange(req);
-    const q = tenantFilter(req, { kind: 'purchase' }); if (range) q.createdAt = range;
+    const q = scoped(req, { kind: 'purchase' }); if (range) q.createdAt = range;
     return {
       rows: await Purchase.find(q).sort('-createdAt').populate('supplier', 'name').lean(),
       columns: [
@@ -93,7 +102,7 @@ const ENTITY_BUILDERS = {
   },
   expenses: async (req) => {
     const range = dateRange(req);
-    const q = tenantFilter(req); if (range) q.date = range;
+    const q = scoped(req); if (range) q.date = range;
     return {
       rows: await Expense.find(q).sort('-date').lean(),
       columns: [
@@ -103,7 +112,7 @@ const ENTITY_BUILDERS = {
     };
   },
   installments: async (req) => ({
-    rows: await Installment.find(tenantFilter(req)).sort('-createdAt').lean(),
+    rows: await Installment.find(scoped(req)).sort('-createdAt').lean(),
     columns: [
       { key: 'customerName', label: 'Customer' }, { key: 'productName', label: 'Item' }, { key: 'imei1', label: 'IMEI' },
       { key: 'totalAmount', label: 'Total' }, { key: 'downPayment', label: 'Down Payment' }, { key: 'months', label: 'Months' },
@@ -128,7 +137,7 @@ export const exportEntity = asyncHandler(async (req, res) => {
   if (!builder) throw new ApiError(400, `Unknown export entity: ${entity}`);
   const { columns, rows } = await builder(req);
 
-  await ImportExportLog.create({ business: req.businessId, action: 'export', entity, format, recordCount: rows.length, createdBy: req.user._id });
+  await ImportExportLog.create({ business: req.businessId, branch: req.branchId, action: 'export', entity, format, recordCount: rows.length, createdBy: req.user._id });
   await logActivity(req, { action: 'EXPORT_DATA', entity: 'Export', meta: { entity, format, count: rows.length } });
 
   if (format === 'json') {
@@ -143,18 +152,21 @@ export const exportEntity = asyncHandler(async (req, res) => {
 
 // @route GET /api/export/backup/full — complete business data dump (JSON, req 13 "System Backup/Migration")
 export const fullBackup = asyncHandler(async (req, res) => {
+  // A full backup spans every branch (it's the whole business account) —
+  // business-wide on purpose, unlike the per-entity exports above.
   const q = tenantFilter(req);
-  const [business, products, units, customers, suppliers, purchases, sales, expenses, installments, employees, funds, services, returns, duePayments] = await Promise.all([
+  const [business, branches, products, units, customers, suppliers, purchases, sales, expenses, installments, employees, funds, services, returns, duePayments] = await Promise.all([
     Business.findById(req.businessId).lean(),
+    Branch.find(q).lean(),
     Product.find(q).lean(), PhoneUnit.find(q).lean(), Customer.find(q).lean(), Supplier.find(q).lean(),
     Purchase.find(q).lean(), Sale.find(q).lean(), Expense.find(q).lean(), Installment.find(q).lean(),
     Employee.find(q).lean(), Fund.find(q).lean(), ServiceJob.find(q).lean(), Return.find(q).lean(), DuePayment.find(q).lean(),
   ]);
   const backup = {
     meta: { exportedAt: new Date(), business: business?.name, version: 1 },
-    business, products, units, customers, suppliers, purchases, sales, expenses, installments, employees, funds, services, returns, duePayments,
+    business, branches, products, units, customers, suppliers, purchases, sales, expenses, installments, employees, funds, services, returns, duePayments,
   };
-  const recordCount = [products, units, customers, suppliers, purchases, sales, expenses, installments, employees, funds, services, returns, duePayments]
+  const recordCount = [branches, products, units, customers, suppliers, purchases, sales, expenses, installments, employees, funds, services, returns, duePayments]
     .reduce((s, arr) => s + arr.length, 0);
 
   await ImportExportLog.create({ business: req.businessId, action: 'backup', entity: 'full', format: 'json', recordCount, createdBy: req.user._id });

@@ -1,13 +1,13 @@
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
-import { tenantFilter } from '../middleware/tenant.js';
+import { branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import Expense from '../models/Expense.js';
 
 export const getExpenses = asyncHandler(async (req, res) => {
   const { from, to } = req.query;
-  const q = tenantFilter(req);
+  const q = branchFilter(req);
   if (from || to) {
     q.date = {};
     if (from) q.date.$gte = new Date(from);
@@ -18,13 +18,13 @@ export const getExpenses = asyncHandler(async (req, res) => {
 });
 
 export const createExpense = asyncHandler(async (req, res) => {
-  const expense = await Expense.create({ ...req.body, business: req.businessId });
+  const expense = await Expense.create({ ...req.body, business: req.businessId, branch: req.branchId });
   await logActivity(req, { action: 'CREATE_EXPENSE', entity: 'Expense', entityId: expense._id });
   created(res, { expense });
 });
 
 export const deleteExpense = asyncHandler(async (req, res) => {
-  const expense = await Expense.findOneAndDelete(tenantFilter(req, { _id: req.params.id }));
+  const expense = await Expense.findOneAndDelete(branchFilter(req, { _id: req.params.id }));
   if (!expense) throw new ApiError(404, 'Expense not found');
   ok(res, {}, 'Expense deleted');
 });

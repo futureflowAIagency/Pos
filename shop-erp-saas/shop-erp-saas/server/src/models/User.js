@@ -14,6 +14,11 @@ const userSchema = new mongoose.Schema(
     // which dashboard modules a 'staff' user can access (owner sets this per-employee);
     // owner/superadmin always have full access regardless of this list
     permissions: { type: [String], default: [] },
+    // locks a staff login to one branch (server-enforced in resolveBranch — the
+    // user can never see another branch's data even by tampering with the
+    // client-sent branch header). null = free to switch branches (owner default,
+    // or a staff member who legitimately works across branches).
+    assignedBranch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', default: null },
     preferences: {
       theme: { type: String, enum: ['light', 'dark'], default: 'light' },
     },

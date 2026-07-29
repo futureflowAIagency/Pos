@@ -6,6 +6,10 @@ import mongoose from 'mongoose';
 const phoneUnitSchema = new mongoose.Schema(
   {
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    // physical branch this unit's stock room belongs to. IMEI/serial uniqueness
+    // still applies BUSINESS-wide (a real device can't be in two branches at
+    // once) even though the document itself is branch-scoped — see phoneUnitController.
+    branch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true, index: true },
     imei1: { type: String, trim: true, default: '' },
     imei2: { type: String, trim: true, default: '' },

@@ -6,6 +6,7 @@ import DataTable from '../components/ui/DataTable.jsx';
 import { downloadBlob, readFileAsText } from '../utils/download.js';
 import { fmtDateTime } from '../utils/format.js';
 import { useConfirm } from '../context/ConfirmContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
 
 const EXPORT_ENTITIES = [
   { key: 'customers', label: 'Customers' },
@@ -28,6 +29,7 @@ const IMPORT_ENTITIES = [
 
 export default function ImportExport() {
   const confirm = useConfirm();
+  const { branches, activeBranch } = useAuth();
   const [range, setRange] = useState({ from: '', to: '' });
   const [history, setHistory] = useState([]);
 
@@ -55,6 +57,10 @@ export default function ImportExport() {
   const [smartResult, setSmartResult] = useState(null);
   const [smartBusy, setSmartBusy] = useState(false);
   const [smartRowAccept, setSmartRowAccept] = useState({}); // row index -> accepted?
+  // which branch's catalog this import writes into — defaults to whatever's
+  // currently active, but can be overridden per-import without switching
+  const [smartBranch, setSmartBranch] = useState('');
+  useEffect(() => { if (activeBranch && !smartBranch) setSmartBranch(activeBranch._id); }, [activeBranch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadHistory = async () => {
     const { data } = await api.get('/export/history/list');
@@ -152,7 +158,7 @@ export default function ImportExport() {
     try {
       const fd = new FormData();
       fd.append('file', smartFile);
-      const { data } = await api.post('/import/smart/preview', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const { data } = await api.post('/import/smart/preview', fd, { headers: { 'Content-Type': 'multipart/form-data', 'X-Branch-Id': smartBranch } });
       setSmartResult(data.data);
       const initial = {};
       data.data.rows.forEach((r, i) => { initial[i] = r.accepted; });
@@ -171,7 +177,7 @@ export default function ImportExport() {
       const fd = new FormData();
       fd.append('file', smartFile);
       fd.append('skipRows', JSON.stringify(skipRows));
-      const { data } = await api.post('/import/smart/commit', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const { data } = await api.post('/import/smart/commit', fd, { headers: { 'Content-Type': 'multipart/form-data', 'X-Branch-Id': smartBranch } });
       const d = data.data;
       toast.success(
         `Imported: ${d.createdProducts} new product(s), ${d.existingProductsGivenImeis} existing product(s) given new IMEIs, ${d.addedUnits} IMEI(s) added` +
@@ -282,6 +288,14 @@ export default function ImportExport() {
         </p>
         <div className="flex flex-wrap items-end gap-3">
           <button className="btn-ghost" onClick={() => downloadTemplate('migration')}><FileText size={16} /> Download Migration Template</button>
+          {branches.length > 1 && (
+            <div>
+              <label className="label">Import into branch</label>
+              <select className="input" value={smartBranch} onChange={(e) => setSmartBranch(e.target.value)}>
+                {branches.filter((b) => b.isActive).map((b) => <option key={b._id} value={b._id}>{b.name}</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label className="label">File</label>
             <input type="file" accept=".xlsx,.xls,.csv,.txt" className="input" onChange={(e) => { setSmartFile(e.target.files?.[0] || null); setSmartResult(null); setSmartRowAccept({}); }} />

@@ -6,6 +6,7 @@ import { logActivity } from '../middleware/activityLogger.js';
 import Employee from '../models/Employee.js';
 import Expense from '../models/Expense.js';
 import User from '../models/User.js';
+import Branch from '../models/Branch.js';
 import { MODULES } from '../config/modules.js';
 
 // Generate the next sequential employee id for a business (collision-safe even after deletes)
@@ -29,6 +30,17 @@ const genTempPassword = () => {
 
 const cleanPermissions = (perms) => (Array.isArray(perms) ? perms.filter((p) => MODULES.includes(p)) : []);
 
+// A staff login can be locked to one branch (multi-branch shops only). Verifies
+// the submitted id actually belongs to this business before trusting it —
+// returns undefined (leave unset) for a blank/absent value, null to explicitly clear it.
+async function resolveAssignedBranch(req, assignedBranch) {
+  if (assignedBranch === undefined) return undefined;
+  if (!assignedBranch) return null;
+  const branch = await Branch.findOne({ _id: assignedBranch, business: req.businessId });
+  if (!branch) throw new ApiError(400, 'Invalid branch selection');
+  return branch._id;
+}
+
 // @route GET /api/employees?status=active|inactive&designation=&search=
 export const getEmployees = asyncHandler(async (req, res) => {
   const { status, designation, search } = req.query;
@@ -44,13 +56,13 @@ export const getEmployees = asyncHandler(async (req, res) => {
       { designation: { $regex: search, $options: 'i' } },
     ];
   }
-  const employees = await Employee.find(q).sort('-createdAt').populate('user', 'email permissions isActive');
+  const employees = await Employee.find(q).sort('-createdAt').populate('user', 'email permissions isActive assignedBranch');
   ok(res, { employees, count: employees.length });
 });
 
 // @route GET /api/employees/:id
 export const getEmployee = asyncHandler(async (req, res) => {
-  const employee = await Employee.findOne(tenantFilter(req, { _id: req.params.id })).populate('user', 'email permissions isActive');
+  const employee = await Employee.findOne(tenantFilter(req, { _id: req.params.id })).populate('user', 'email permissions isActive assignedBranch');
   if (!employee) throw new ApiError(404, 'Employee not found');
   ok(res, { employee });
 });
@@ -61,12 +73,13 @@ export const getEmployee = asyncHandler(async (req, res) => {
 // fresh temporary password returned exactly once — the owner controls exactly
 // which dashboard modules that login can see via `permissions`.
 export const createEmployee = asyncHandler(async (req, res) => {
-  const { email, grantLogin, permissions, ...rest } = req.body;
+  const { email, grantLogin, permissions, assignedBranch, ...rest } = req.body;
   if (grantLogin) {
     if (!email?.trim()) throw new ApiError(400, 'Email is required to grant login access');
     const exists = await User.findOne({ email: email.toLowerCase().trim() });
     if (exists) throw new ApiError(409, 'This email is already registered to another account');
   }
+  const branchId = await resolveAssignedBranch(req, assignedBranch);
 
   const employeeId = rest.employeeId || (await nextEmployeeId(req.businessId));
   const employee = await Employee.create({ ...rest, email, employeeId, business: req.businessId });
@@ -77,6 +90,7 @@ export const createEmployee = asyncHandler(async (req, res) => {
     const user = await User.create({
       name: employee.name, email: email.trim(), phone: employee.phone, password: tempPassword,
       role: 'staff', business: req.businessId, permissions: cleanPermissions(permissions),
+      assignedBranch: branchId || null,
     });
     employee.user = user._id;
     await employee.save();
@@ -92,7 +106,7 @@ export const createEmployee = asyncHandler(async (req, res) => {
 // as at creation; if a login already exists, permissions can be adjusted anytime
 // and the linked login's name/phone are kept in sync.
 export const updateEmployee = asyncHandler(async (req, res) => {
-  const { email, grantLogin, permissions, ...rest } = req.body;
+  const { email, grantLogin, permissions, assignedBranch, ...rest } = req.body;
   delete rest.employeeId; // employee id is immutable
   delete rest.business;
   delete rest.user;
@@ -102,6 +116,7 @@ export const updateEmployee = asyncHandler(async (req, res) => {
 
   Object.assign(employee, rest);
   if (email !== undefined) employee.email = email;
+  const branchId = await resolveAssignedBranch(req, assignedBranch);
 
   let tempPassword;
   if (!employee.user && grantLogin) {
@@ -112,11 +127,13 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     const user = await User.create({
       name: employee.name, email: employee.email.trim(), phone: employee.phone, password: tempPassword,
       role: 'staff', business: req.businessId, permissions: cleanPermissions(permissions),
+      assignedBranch: branchId || null,
     });
     employee.user = user._id;
   } else if (employee.user) {
     const update = { name: employee.name, phone: employee.phone };
     if (permissions !== undefined) update.permissions = cleanPermissions(permissions);
+    if (branchId !== undefined) update.assignedBranch = branchId;
     await User.updateOne({ _id: employee.user }, update);
   }
 

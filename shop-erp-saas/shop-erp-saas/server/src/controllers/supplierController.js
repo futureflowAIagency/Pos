@@ -68,6 +68,7 @@ export const recordPurchase = asyncHandler(async (req, res) => {
 
   const purchase = await Purchase.create({
     business: req.businessId,
+    branch: req.branchId,
     supplier: supplier._id,
     kind: 'purchase',
     reference, note,
@@ -97,6 +98,7 @@ export const paySupplier = asyncHandler(async (req, res) => {
 
   const payment = await Purchase.create({
     business: req.businessId,
+    branch: req.branchId,
     supplier: supplier._id,
     kind: 'payment',
     note,
@@ -139,6 +141,7 @@ export const adjustSupplierDue = asyncHandler(async (req, res) => {
 
   const adjustment = await Purchase.create({
     business: req.businessId,
+    branch: req.branchId,
     supplier: supplier._id,
     kind: 'adjustment',
     note: note || `Due corrected from ${previousDue} to ${target}`,

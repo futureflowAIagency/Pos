@@ -6,6 +6,7 @@ import { generateToken } from '../utils/generateToken.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import User from '../models/User.js';
 import Business from '../models/Business.js';
+import Branch from '../models/Branch.js';
 
 export const publicUser = (u) => ({
   id: u._id,
@@ -17,6 +18,8 @@ export const publicUser = (u) => ({
   preferences: u.preferences,
   // which modules this user can see — only meaningful for role:'staff'
   permissions: u.permissions || [],
+  // a staff login locked to one branch — null = free to switch (owner default)
+  assignedBranch: u.assignedBranch || null,
 });
 
 // @desc Public self-registration is DISABLED.
@@ -45,6 +48,9 @@ export const createOwnerWithBusiness = async ({ name, email, password, phone, bu
       );
       user.business = business._id;
       await user.save({ session });
+      // every business needs at least one branch — this one is the default
+      // fallback until the owner adds more from the Branches page
+      await Branch.create([{ business: business._id, name: 'Main Branch', isMainBranch: true }], { session });
     });
   } finally {
     session.endSession();
@@ -69,9 +75,26 @@ export const login = asyncHandler(async (req, res) => {
 
 // @desc Get current user
 // @route GET /api/auth/me
+// Also resolves the active branch (same precedence as middleware/tenant.js's
+// resolveBranch: assignedBranch lock > X-Branch-Id header > main branch) so the
+// client can populate its branch switcher right after login/refresh without a
+// second round trip. No `requireBusiness` on this route (superadmin has none),
+// so branches/activeBranch are only computed when the user actually has a business.
 export const getMe = asyncHandler(async (req, res) => {
   const business = req.user.business ? await Business.findById(req.user.business) : null;
-  ok(res, { user: publicUser(req.user), business });
+  let branches = [];
+  let activeBranchId = null;
+  if (business) {
+    branches = await Branch.find({ business: business._id }).sort('-isMainBranch name');
+    const assigned = req.user.assignedBranch ? String(req.user.assignedBranch) : null;
+    const requested = assigned || req.headers['x-branch-id'];
+    const active = (requested && branches.find((b) => String(b._id) === requested && b.isActive))
+      || branches.find((b) => b.isMainBranch)
+      || branches.find((b) => b.isActive)
+      || null;
+    activeBranchId = active?._id || null;
+  }
+  ok(res, { user: publicUser(req.user), business, branches, activeBranchId });
 });
 
 // @desc Update theme preference

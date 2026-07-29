@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Package, ShoppingCart, Users, UserCog,
   Wallet, CreditCard, Settings, ScrollText, ShieldCheck, X,
-  Truck, ShieldQuestion, CalendarClock, Wrench, Megaphone, Contact2, Undo2, FileSpreadsheet,
+  Truck, ShieldQuestion, CalendarClock, Wrench, Megaphone, Contact2, Undo2, FileSpreadsheet, Store,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useLang } from '../../context/LanguageContext.jsx';
@@ -35,10 +35,13 @@ const mobileLinks = [
 ];
 
 export default function Sidebar({ open, onClose }) {
-  const { user, business } = useAuth();
+  const { user, business, activeBranch, branches } = useAuth();
   const { t } = useLang();
   const isAdmin = user?.role === 'superadmin';
   const isMobile = business?.type === 'mobile';
+  // Branch management is an owner-level business-structure decision (matches
+  // the server's branchRoutes.js gate), not a per-module staff permission.
+  const canManageBranches = ['owner', 'superadmin'].includes(user?.role);
 
   // insert mobile module links right after "Suppliers" for mobile shops
   let ownerLinks = isMobile
@@ -63,6 +66,9 @@ export default function Sidebar({ open, onClose }) {
           <div>
             <h1 className="font-bold text-brand-600">{t('Shop ERP')}</h1>
             <p className="text-xs text-slate-400 truncate max-w-[150px]">{business?.name || t('Workspace')}</p>
+            {branches.length > 1 && activeBranch && (
+              <p className="text-[11px] text-brand-500 truncate max-w-[150px]">{activeBranch.name}</p>
+            )}
           </div>
           <button onClick={onClose} className="lg:hidden btn-ghost p-1"><X size={18} /></button>
         </div>
@@ -71,11 +77,18 @@ export default function Sidebar({ open, onClose }) {
           {isAdmin ? (
             <NavLink to="/admin" className={navClass}><ShieldCheck size={18} /> {t('Admin Panel')}</NavLink>
           ) : (
-            ownerLinks.map((l) => (
-              <NavLink key={l.to} to={l.to} end={l.end} className={navClass} onClick={onClose}>
-                <l.icon size={18} /> {t(l.label)}
-              </NavLink>
-            ))
+            <>
+              {ownerLinks.map((l) => (
+                <NavLink key={l.to} to={l.to} end={l.end} className={navClass} onClick={onClose}>
+                  <l.icon size={18} /> {t(l.label)}
+                </NavLink>
+              ))}
+              {canManageBranches && (
+                <NavLink to="/branches" className={navClass} onClick={onClose}>
+                  <Store size={18} /> {t('Branches')}
+                </NavLink>
+              )}
+            </>
           )}
         </nav>
       </aside>

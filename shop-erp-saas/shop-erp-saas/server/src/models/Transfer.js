@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 const transferSchema = new mongoose.Schema(
   {
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    branch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     fromMethod: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], required: true },
     toMethod: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], required: true },
     amount: { type: Number, required: true, default: 0 },

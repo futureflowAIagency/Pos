@@ -1,22 +1,23 @@
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
-import { tenantFilter } from '../middleware/tenant.js';
+import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import PhoneUnit from '../models/PhoneUnit.js';
 import Product from '../models/Product.js';
 
-// Recompute a product's stock from its in-stock units.
+// Recompute a product's stock from its in-stock units (both are branch-scoped —
+// a productId already implies one specific branch's catalog entry).
 const syncProductStock = async (req, productId) => {
-  const inStock = await PhoneUnit.countDocuments(tenantFilter(req, { product: productId, status: 'in_stock' }));
-  await Product.updateOne(tenantFilter(req, { _id: productId }), { stock: inStock, trackSerial: true });
+  const inStock = await PhoneUnit.countDocuments(branchFilter(req, { product: productId, status: 'in_stock' }));
+  await Product.updateOne(branchFilter(req, { _id: productId }), { stock: inStock, trackSerial: true });
   return inStock;
 };
 
 // @route GET /api/units?product=&status=&search=
 export const getUnits = asyncHandler(async (req, res) => {
   const { product, status, search } = req.query;
-  const q = tenantFilter(req);
+  const q = branchFilter(req);
   if (product) q.product = product;
   if (status) q.status = status;
   if (search) q.$or = [
@@ -34,7 +35,7 @@ export const addUnits = asyncHandler(async (req, res) => {
   if (!product) throw new ApiError(400, 'Product is required');
   if (!units.length) throw new ApiError(400, 'Provide at least one IMEI / serial');
 
-  const prod = await Product.findOne(tenantFilter(req, { _id: product }));
+  const prod = await Product.findOne(branchFilter(req, { _id: product }));
   if (!prod) throw new ApiError(404, 'Product not found');
 
   // validate + de-dupe within the submitted batch
@@ -50,7 +51,9 @@ export const addUnits = asyncHandler(async (req, res) => {
     clean.push({ imei1, imei2: (u.imei2 || '').trim(), serial });
   }
 
-  // block IMEIs/serials that already exist for this business
+  // block IMEIs/serials that already exist for this business (stays business-wide
+  // — a real device can't be in two branches at once — even though the branch
+  // being added to is one specific location)
   const existing = await PhoneUnit.find(tenantFilter(req, {
     $or: [
       { imei1: { $in: clean.map((c) => c.imei1).filter(Boolean) } },
@@ -63,7 +66,7 @@ export const addUnits = asyncHandler(async (req, res) => {
   }
 
   const docs = await PhoneUnit.insertMany(
-    clean.map((c) => ({ ...c, business: req.businessId, product: prod._id, status: 'in_stock' }))
+    clean.map((c) => ({ ...c, business: req.businessId, branch: req.branchId, product: prod._id, status: 'in_stock' }))
   );
   const stock = await syncProductStock(req, prod._id);
 
@@ -73,7 +76,7 @@ export const addUnits = asyncHandler(async (req, res) => {
 
 // @route DELETE /api/units/:id  (only in-stock units may be removed)
 export const deleteUnit = asyncHandler(async (req, res) => {
-  const unit = await PhoneUnit.findOne(tenantFilter(req, { _id: req.params.id }));
+  const unit = await PhoneUnit.findOne(branchFilter(req, { _id: req.params.id }));
   if (!unit) throw new ApiError(404, 'Unit not found');
   if (unit.status === 'sold') throw new ApiError(400, 'Cannot delete a sold unit');
   await unit.deleteOne();
@@ -82,11 +85,13 @@ export const deleteUnit = asyncHandler(async (req, res) => {
 });
 
 // @route GET /api/units/lookup?imei=...  -> resolve one in-stock unit for POS
+// Branch-scoped — a scan at Branch A must never resolve a unit physically sitting
+// in Branch B's stock room, even though it's the same business.
 export const lookupUnit = asyncHandler(async (req, res) => {
   const { imei } = req.query;
   if (!imei) throw new ApiError(400, 'IMEI / serial is required');
   const term = imei.trim();
-  const unit = await PhoneUnit.findOne(tenantFilter(req, {
+  const unit = await PhoneUnit.findOne(branchFilter(req, {
     status: 'in_stock',
     $or: [{ imei1: term }, { imei2: term }, { serial: term }],
   })).populate('product');
@@ -95,6 +100,9 @@ export const lookupUnit = asyncHandler(async (req, res) => {
 });
 
 // @route GET /api/units/warranty?imei=...  -> warranty check portal
+// Business-wide on purpose — a customer checking warranty may not remember (or
+// care) which branch they bought from; this is an informational lookup, not a
+// stock-availability action.
 export const warrantyCheck = asyncHandler(async (req, res) => {
   const { imei } = req.query;
   if (!imei) throw new ApiError(400, 'IMEI / serial is required');

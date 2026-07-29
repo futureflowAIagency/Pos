@@ -24,6 +24,7 @@ import returnRoutes from './returnRoutes.js';
 import exportRoutes from './exportRoutes.js';
 import importRoutes from './importRoutes.js';
 import transferRoutes from './transferRoutes.js';
+import branchRoutes from './branchRoutes.js';
 
 const router = Router();
 
@@ -53,6 +54,7 @@ router.use('/returns', returnRoutes);
 router.use('/export', exportRoutes);
 router.use('/import', importRoutes);
 router.use('/transfers', transferRoutes);
+router.use('/branches', branchRoutes);
 
 router.get('/health', (req, res) => res.json({ success: true, message: 'API healthy', ts: Date.now() }));
 

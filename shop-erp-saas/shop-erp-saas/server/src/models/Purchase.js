@@ -15,6 +15,8 @@ const purchaseItemSchema = new mongoose.Schema(
 const purchaseSchema = new mongoose.Schema(
   {
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    // which branch received the goods / made the payment — Supplier itself stays business-wide
+    branch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     supplier: { type: mongoose.Schema.Types.ObjectId, ref: 'Supplier', required: true, index: true },
     reference: { type: String, default: '' }, // invoice / memo no from supplier
     items: [purchaseItemSchema],

@@ -6,6 +6,7 @@ export const SERVICE_STATUSES = ['pending', 'repairing', 'completed', 'delivered
 const serviceJobSchema = new mongoose.Schema(
   {
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    branch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     jobNo: { type: String, required: true },
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', default: null },
     customerName: { type: String, default: '' },

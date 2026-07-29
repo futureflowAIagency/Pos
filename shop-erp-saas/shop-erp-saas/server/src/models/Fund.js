@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 const fundSchema = new mongoose.Schema(
   {
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    branch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     // which balance this fund lands in / is taken from
     source: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' },
     // 'add' = capital brought in, 'withdraw' = (partial or full) capital taken back out

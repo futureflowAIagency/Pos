@@ -22,8 +22,15 @@ const emptyMap = () => METHODS.reduce((m, k) => { m[k] = 0; return m; }, {});
 // Money OUT = expenses (by source) + supplier purchase/payment `paid` (by source)
 //           + return/exchange cash refunds (by refundMethod; store-credit is excluded — no cash moves)
 //           + funds withdrawn (by source) + transfers out (by fromMethod)
-export async function computeBalances(businessId) {
+//
+// Each branch keeps its own till — pass `branchId` to scope to one branch (the
+// normal case, the active branch); pass null/omit for the owner's "All Branches"
+// combined view. Only Sale/DuePayment/ServiceJob/Installment/Fund/Transfer/
+// Expense/Purchase/Return carry `branch` — Customer/Supplier/Employee (not
+// queried here) stay business-wide by design.
+export async function computeBalances(businessId, branchId = null) {
   const bId = new mongoose.Types.ObjectId(businessId);
+  const branchMatch = branchId ? { branch: new mongoose.Types.ObjectId(branchId) } : {};
 
   const [
     splitSalesIn, legacySalesIn, dueIn, serviceIn, emiDownIn, emiScheduleIn,
@@ -32,65 +39,65 @@ export async function computeBalances(businessId) {
   ] = await Promise.all([
     // Multi-tender sales: unwind the payments[] breakdown
     Sale.aggregate([
-      { $match: { business: bId, 'payments.0': { $exists: true } } },
+      { $match: { business: bId, ...branchMatch, 'payments.0': { $exists: true } } },
       { $unwind: '$payments' },
       { $group: { _id: '$payments.method', amount: { $sum: '$payments.amount' } } },
     ]),
     // Legacy single-tender sales (no payments[] recorded) — fall back to paid+paidVia
     Sale.aggregate([
-      { $match: { business: bId, $or: [{ payments: { $exists: false } }, { payments: { $size: 0 } }] } },
+      { $match: { business: bId, ...branchMatch, $or: [{ payments: { $exists: false } }, { payments: { $size: 0 } }] } },
       { $group: { _id: { $ifNull: ['$paidVia', 'cash'] }, amount: { $sum: '$paid' } } },
     ]),
     DuePayment.aggregate([
-      { $match: { business: bId } },
+      { $match: { business: bId, ...branchMatch } },
       { $group: { _id: { $ifNull: ['$method', 'cash'] }, amount: { $sum: '$amount' } } },
     ]),
     ServiceJob.aggregate([
-      { $match: { business: bId } },
+      { $match: { business: bId, ...branchMatch } },
       { $group: { _id: { $ifNull: ['$paymentMethod', 'cash'] }, amount: { $sum: '$paid' } } },
     ]),
     Installment.aggregate([
-      { $match: { business: bId } },
+      { $match: { business: bId, ...branchMatch } },
       { $group: { _id: { $ifNull: ['$downPaymentMethod', 'cash'] }, amount: { $sum: '$downPayment' } } },
     ]),
     Installment.aggregate([
-      { $match: { business: bId } },
+      { $match: { business: bId, ...branchMatch } },
       { $unwind: '$schedule' },
       { $match: { 'schedule.paid': true } },
       { $group: { _id: { $ifNull: ['$schedule.method', 'cash'] }, amount: { $sum: '$schedule.amount' } } },
     ]),
     // Capital brought in (money IN)
     Fund.aggregate([
-      { $match: { business: bId, type: { $ne: 'withdraw' } } },
+      { $match: { business: bId, ...branchMatch, type: { $ne: 'withdraw' } } },
       { $group: { _id: { $ifNull: ['$source', 'cash'] }, amount: { $sum: '$amount' } } },
     ]),
     // Capital taken back out (money OUT) — not an expense, just a reversal of prior capital
     Fund.aggregate([
-      { $match: { business: bId, type: 'withdraw' } },
+      { $match: { business: bId, ...branchMatch, type: 'withdraw' } },
       { $group: { _id: { $ifNull: ['$source', 'cash'] }, amount: { $sum: '$amount' } } },
     ]),
     // Balance transfers — money arriving in the `to` method
     Transfer.aggregate([
-      { $match: { business: bId } },
+      { $match: { business: bId, ...branchMatch } },
       { $group: { _id: '$toMethod', amount: { $sum: '$amount' } } },
     ]),
     // Balance transfers — money leaving the `from` method
     Transfer.aggregate([
-      { $match: { business: bId } },
+      { $match: { business: bId, ...branchMatch } },
       { $group: { _id: '$fromMethod', amount: { $sum: '$amount' } } },
     ]),
     Expense.aggregate([
-      { $match: { business: bId } },
+      { $match: { business: bId, ...branchMatch } },
       { $group: { _id: { $ifNull: ['$source', 'cash'] }, amount: { $sum: '$amount' } } },
     ]),
     // supplier purchases (paid-now portion) + standalone due payments — both are money OUT
     Purchase.aggregate([
-      { $match: { business: bId } },
+      { $match: { business: bId, ...branchMatch } },
       { $group: { _id: { $ifNull: ['$source', 'cash'] }, amount: { $sum: '$paid' } } },
     ]),
     // return/exchange cash refunds — money OUT (store credit is intentionally excluded)
     Return.aggregate([
-      { $match: { business: bId } },
+      { $match: { business: bId, ...branchMatch } },
       { $group: { _id: { $ifNull: ['$refundMethod', 'cash'] }, amount: { $sum: '$cashRefund' } } },
     ]),
   ]);

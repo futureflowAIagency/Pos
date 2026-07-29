@@ -25,6 +25,7 @@ const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
 const returnSchema = new mongoose.Schema(
   {
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    branch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     sale: { type: mongoose.Schema.Types.ObjectId, ref: 'Sale', required: true, index: true },
     invoiceNo: { type: String, default: '' },
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', default: null },

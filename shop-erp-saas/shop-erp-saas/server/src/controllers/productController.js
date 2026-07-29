@@ -1,7 +1,7 @@
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
-import { tenantFilter } from '../middleware/tenant.js';
+import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import Product from '../models/Product.js';
 import PhoneUnit from '../models/PhoneUnit.js';
@@ -11,12 +11,12 @@ import Purchase from '../models/Purchase.js';
 const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// Generate a barcode value that's unique within the business.
+// Generate a barcode value that's unique within the active branch's catalog.
 const genBarcodeValue = () => String(Date.now()).slice(-9) + String(Math.floor(Math.random() * 900 + 100));
 const uniqueBarcode = async (req) => {
   for (let i = 0; i < 8; i++) {
     const code = genBarcodeValue();
-    const clash = await Product.findOne(tenantFilter(req, { barcode: code }));
+    const clash = await Product.findOne(branchFilter(req, { barcode: code }));
     if (!clash) return code;
   }
   return genBarcodeValue() + String(Math.floor(Math.random() * 9)); // extremely unlikely fallback
@@ -25,12 +25,13 @@ const uniqueBarcode = async (req) => {
 // @route GET /api/products?search=&category=&lowStock=true
 export const getProducts = asyncHandler(async (req, res) => {
   const { search, category, lowStock } = req.query;
-  const q = tenantFilter(req, { isActive: true });
+  const q = branchFilter(req, { isActive: true });
   if (search) {
     // Also match products by a unit's IMEI/serial — a shop owner searching an
     // IMEI that's already in stock expects to find the product it belongs to,
-    // not just products matched by name/SKU/barcode.
-    const unitProductIds = await PhoneUnit.find(tenantFilter(req, {
+    // not just products matched by name/SKU/barcode. Scoped to the active branch
+    // — a scanned/typed code should only resolve stock actually on this shelf.
+    const unitProductIds = await PhoneUnit.find(branchFilter(req, {
       $or: [{ imei1: { $regex: search, $options: 'i' } }, { imei2: { $regex: search, $options: 'i' } }, { serial: { $regex: search, $options: 'i' } }],
     })).distinct('product');
     q.$or = [
@@ -51,7 +52,7 @@ export const getProducts = asyncHandler(async (req, res) => {
 export const getProductByBarcode = asyncHandler(async (req, res) => {
   const code = String(req.params.code || '').trim();
   if (!code) throw new ApiError(400, 'Barcode is required');
-  const product = await Product.findOne(tenantFilter(req, { barcode: code, isActive: true }));
+  const product = await Product.findOne(branchFilter(req, { barcode: code, isActive: true }));
   if (!product) throw new ApiError(404, 'No product found for this barcode');
   ok(res, { product });
 });
@@ -62,15 +63,15 @@ export const createProduct = asyncHandler(async (req, res) => {
   if (isMedicine && !req.body.expiryDate) {
     throw new ApiError(400, 'Expiry date is required for medicines');
   }
-  // reuse a provided barcode (must be free) or auto-generate a unique one
+  // reuse a provided barcode (must be free within this branch) or auto-generate one
   let barcode = String(req.body.barcode || '').trim();
   if (barcode) {
-    const clash = await Product.findOne(tenantFilter(req, { barcode }));
-    if (clash) throw new ApiError(409, 'Barcode already in use by another product');
+    const clash = await Product.findOne(branchFilter(req, { barcode }));
+    if (clash) throw new ApiError(409, 'Barcode already in use by another product in this branch');
   } else {
     barcode = await uniqueBarcode(req);
   }
-  const product = await Product.create({ ...req.body, barcode, business: req.businessId });
+  const product = await Product.create({ ...req.body, barcode, business: req.businessId, branch: req.branchId });
   await logActivity(req, { action: 'CREATE_PRODUCT', entity: 'Product', entityId: product._id, meta: { name: product.name } });
   created(res, { product });
 });
@@ -95,7 +96,9 @@ export const createProductsWithSupplier = asyncHandler(async (req, res) => {
     await supplier.save();
   }
 
-  // de-dupe IMEI/serial across the whole submitted batch before touching the DB
+  // de-dupe IMEI/serial across the whole submitted batch before touching the DB.
+  // Stays BUSINESS-wide (not branch-scoped) — a real device can't physically be
+  // in two branches at once, so uniqueness holds across the whole shop.
   const allCodes = [];
   for (const raw of items) {
     if (!raw.trackSerial) continue;
@@ -123,7 +126,7 @@ export const createProductsWithSupplier = asyncHandler(async (req, res) => {
 
     let barcode = String(raw.barcode || '').trim();
     if (barcode) {
-      const clash = await Product.findOne(tenantFilter(req, { barcode }));
+      const clash = await Product.findOne(branchFilter(req, { barcode }));
       if (clash) throw new ApiError(409, `Barcode already in use: ${barcode}`);
     } else {
       barcode = await uniqueBarcode(req);
@@ -138,6 +141,7 @@ export const createProductsWithSupplier = asyncHandler(async (req, res) => {
       ...raw,
       name, barcode,
       business: req.businessId,
+      branch: req.branchId,
       trackSerial,
       supplier: supplier._id,
       stock: trackSerial ? 0 : qty, // synced from units below when trackSerial
@@ -152,7 +156,7 @@ export const createProductsWithSupplier = asyncHandler(async (req, res) => {
 
     if (trackSerial && imeis.length) {
       await PhoneUnit.insertMany(imeis.map((u) => ({
-        business: req.businessId, product: product._id, status: 'in_stock',
+        business: req.businessId, branch: req.branchId, product: product._id, status: 'in_stock',
         imei1: (u.imei1 || '').trim(), imei2: (u.imei2 || '').trim(), serial: (u.serial || '').trim(),
       })));
       product.stock = imeis.length;
@@ -167,6 +171,7 @@ export const createProductsWithSupplier = asyncHandler(async (req, res) => {
   const paidAmt = Math.max(0, Math.min(Number(paid || 0), total));
   const purchase = await Purchase.create({
     business: req.businessId,
+    branch: req.branchId,
     supplier: supplier._id,
     kind: 'purchase',
     reference, note,
@@ -187,11 +192,11 @@ export const createProductsWithSupplier = asyncHandler(async (req, res) => {
 
 // @route PUT /api/products/:id
 export const updateProduct = asyncHandler(async (req, res) => {
-  // if a barcode is being set, make sure no other product already owns it
+  // if a barcode is being set, make sure no other product in this branch already owns it
   const barcode = String(req.body.barcode || '').trim();
   if (barcode) {
-    const clash = await Product.findOne(tenantFilter(req, { barcode, _id: { $ne: req.params.id } }));
-    if (clash) throw new ApiError(409, 'Barcode already in use by another product');
+    const clash = await Product.findOne(branchFilter(req, { barcode, _id: { $ne: req.params.id } }));
+    if (clash) throw new ApiError(409, 'Barcode already in use by another product in this branch');
   }
   // an empty string means "no supplier" — cast that to null so Mongoose doesn't
   // try (and fail) to interpret '' as an ObjectId
@@ -199,7 +204,7 @@ export const updateProduct = asyncHandler(async (req, res) => {
   if ('supplier' in body && !body.supplier) body.supplier = null;
 
   const product = await Product.findOneAndUpdate(
-    tenantFilter(req, { _id: req.params.id }),
+    branchFilter(req, { _id: req.params.id }),
     body,
     { new: true, runValidators: true }
   ).populate('supplier', 'name');
@@ -211,7 +216,7 @@ export const updateProduct = asyncHandler(async (req, res) => {
 // @route DELETE /api/products/:id  (soft delete)
 export const deleteProduct = asyncHandler(async (req, res) => {
   const product = await Product.findOneAndUpdate(
-    tenantFilter(req, { _id: req.params.id }),
+    branchFilter(req, { _id: req.params.id }),
     { isActive: false },
     { new: true }
   );

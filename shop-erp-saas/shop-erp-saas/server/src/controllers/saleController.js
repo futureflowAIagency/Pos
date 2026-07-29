@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
-import { tenantFilter } from '../middleware/tenant.js';
+import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import { expiredError } from '../utils/expiry.js';
 import Sale from '../models/Sale.js';
@@ -43,7 +43,7 @@ export const createSale = asyncHandler(async (req, res) => {
       let profit = 0;
 
       for (const it of items) {
-        const product = await Product.findOne(tenantFilter(req, { _id: it.product })).session(session);
+        const product = await Product.findOne(branchFilter(req, { _id: it.product })).session(session);
         if (!product) throw new ApiError(404, `Product not found: ${it.product}`);
         // hard stop, server-side, so no client (or a stale held bill) can sell expired stock
         const expired = expiredError(product);
@@ -65,7 +65,7 @@ export const createSale = asyncHandler(async (req, res) => {
 
         if (it.unit) {
           // serial-tracked (mobile) line — exactly one specific device by IMEI
-          const unit = await PhoneUnit.findOne(tenantFilter(req, { _id: it.unit })).session(session);
+          const unit = await PhoneUnit.findOne(branchFilter(req, { _id: it.unit })).session(session);
           if (!unit) throw new ApiError(404, 'Selected device unit not found');
           if (unit.status === 'sold') throw new ApiError(400, `Device ${unit.imei1 || unit.serial} is already sold`);
           if (String(unit.product) !== String(product._id)) throw new ApiError(400, 'Unit does not match product');
@@ -144,6 +144,7 @@ export const createSale = asyncHandler(async (req, res) => {
 
       [sale] = await Sale.create([{
         business: req.businessId,
+        branch: req.branchId,
         invoiceNo: genInvoiceNo(),
         customer: custDoc?._id || null,
         customerName,
@@ -186,7 +187,7 @@ export const createSale = asyncHandler(async (req, res) => {
 // @route GET /api/sales?from=&to=
 export const getSales = asyncHandler(async (req, res) => {
   const { from, to, limit = 100 } = req.query;
-  const q = tenantFilter(req);
+  const q = branchFilter(req);
   if (from || to) {
     q.createdAt = {};
     if (from) q.createdAt.$gte = new Date(from);
@@ -198,9 +199,9 @@ export const getSales = asyncHandler(async (req, res) => {
 
 // @route GET /api/sales/:id  — full invoice + its due-payment history
 export const getSale = asyncHandler(async (req, res) => {
-  const sale = await Sale.findOne(tenantFilter(req, { _id: req.params.id }));
+  const sale = await Sale.findOne(branchFilter(req, { _id: req.params.id }));
   if (!sale) throw new ApiError(404, 'Sale not found');
-  const duePayments = await DuePayment.find(tenantFilter(req, { sale: sale._id })).sort('date');
+  const duePayments = await DuePayment.find(branchFilter(req, { sale: sale._id })).sort('date');
   ok(res, { sale, duePayments });
 });
 
@@ -209,7 +210,7 @@ export const getSale = asyncHandler(async (req, res) => {
 // Line items are not edited here (stock/IMEI reversal is out of scope); use
 // Return & Exchange (Phase 9) for item changes.
 export const updateSale = asyncHandler(async (req, res) => {
-  const sale = await Sale.findOne(tenantFilter(req, { _id: req.params.id }));
+  const sale = await Sale.findOne(branchFilter(req, { _id: req.params.id }));
   if (!sale) throw new ApiError(404, 'Sale not found');
   const { discount, paid, paymentMethod, customerName } = req.body;
   const oldDue = sale.due;
@@ -258,7 +259,7 @@ export const collectSaleDue = asyncHandler(async (req, res) => {
   if (!amt || amt <= 0) throw new ApiError(400, 'Enter a valid amount');
   const m = TENDERS.includes(method) ? method : 'cash';
 
-  const sale = await Sale.findOne(tenantFilter(req, { _id: req.params.id }));
+  const sale = await Sale.findOne(branchFilter(req, { _id: req.params.id }));
   if (!sale) throw new ApiError(404, 'Sale not found');
   if (sale.due <= 0) throw new ApiError(400, 'This invoice has no due');
 
@@ -274,7 +275,7 @@ export const collectSaleDue = asyncHandler(async (req, res) => {
   }
 
   const duePayment = await DuePayment.create({
-    business: req.businessId, customer: sale.customer, sale: sale._id,
+    business: req.businessId, branch: req.branchId, customer: sale.customer, sale: sale._id,
     amount: pay, method: m, previousDue, remainingDue: sale.due, collectedBy: req.user._id,
   });
   await logActivity(req, { action: 'COLLECT_DUE', entity: 'Sale', entityId: sale._id, meta: { amount: pay, method: m } });
@@ -286,7 +287,7 @@ export const salesReport = asyncHandler(async (req, res) => {
   const { period = 'daily' } = req.query;
   const fmt = period === 'monthly' ? '%Y-%m' : '%Y-%m-%d';
   const report = await Sale.aggregate([
-    { $match: { business: new mongoose.Types.ObjectId(req.businessId) } },
+    { $match: { business: new mongoose.Types.ObjectId(req.businessId), branch: new mongoose.Types.ObjectId(req.branchId) } },
     {
       $group: {
         _id: { $dateToString: { format: fmt, date: '$createdAt' } },

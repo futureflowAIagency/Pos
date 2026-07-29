@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok } from '../utils/apiResponse.js';
-import { tenantFilter } from '../middleware/tenant.js';
+import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import { parseCSV } from '../utils/csv.js';
 import { parseUploadedFile } from '../utils/smartImport.js';
@@ -89,6 +89,7 @@ function validateExpenseRow(row) {
 }
 // units also checks against the DB (not just the file) — the most business-critical
 // duplicate to catch before committing, so it's verified during the dry-run too.
+// Business-wide on purpose: a real device can't be in two branches at once.
 async function validateUnitRow(row, seen, req) {
   const imei1 = row.imei1?.trim() || '';
   const imei2 = row.imei2?.trim() || '';
@@ -155,29 +156,31 @@ export const commitImport = asyncHandler(async (req, res) => {
       else { await Supplier.create({ ...data, business: req.businessId }); createdCount++; }
     }
   } else if (entity === 'products') {
+    // barcode uniqueness (and thus the upsert match) is per-branch — this import
+    // writes into the active branch's catalog
     for (const data of valid) {
-      const existing = data.barcode ? await Product.findOne(tenantFilter(req, { barcode: data.barcode })) : null;
+      const existing = data.barcode ? await Product.findOne(branchFilter(req, { barcode: data.barcode })) : null;
       if (existing) { Object.assign(existing, data); await existing.save(); updatedCount++; }
-      else { await Product.create({ ...data, business: req.businessId }); createdCount++; }
+      else { await Product.create({ ...data, business: req.businessId, branch: req.branchId }); createdCount++; }
     }
   } else if (entity === 'expenses') {
-    for (const data of valid) { await Expense.create({ ...data, business: req.businessId }); createdCount++; }
+    for (const data of valid) { await Expense.create({ ...data, business: req.businessId, branch: req.branchId }); createdCount++; }
   } else if (entity === 'units') {
     const { product } = req.body;
     if (!product) throw new ApiError(400, 'Select a product for the IMEI/serial import');
-    const prod = await Product.findOne(tenantFilter(req, { _id: product }));
+    const prod = await Product.findOne(branchFilter(req, { _id: product }));
     if (!prod) throw new ApiError(404, 'Product not found');
     for (const data of valid) {
-      await PhoneUnit.create({ ...data, business: req.businessId, product: prod._id, status: 'in_stock' });
+      await PhoneUnit.create({ ...data, business: req.businessId, branch: req.branchId, product: prod._id, status: 'in_stock' });
       createdCount++;
     }
     if (createdCount > 0) {
-      const inStock = await PhoneUnit.countDocuments(tenantFilter(req, { product: prod._id, status: 'in_stock' }));
-      await Product.updateOne(tenantFilter(req, { _id: prod._id }), { stock: inStock, trackSerial: true });
+      const inStock = await PhoneUnit.countDocuments(branchFilter(req, { product: prod._id, status: 'in_stock' }));
+      await Product.updateOne(branchFilter(req, { _id: prod._id }), { stock: inStock, trackSerial: true });
     }
   }
 
-  await ImportExportLog.create({ business: req.businessId, action: 'import', entity, format: 'csv', recordCount: createdCount + updatedCount, errorCount: errors.length, createdBy: req.user._id });
+  await ImportExportLog.create({ business: req.businessId, branch: req.branchId, action: 'import', entity, format: 'csv', recordCount: createdCount + updatedCount, errorCount: errors.length, createdBy: req.user._id });
   await logActivity(req, { action: 'IMPORT_DATA', entity: 'Import', meta: { entity, created: createdCount, updated: updatedCount, errors: errors.length } });
   ok(res, { created: createdCount, updated: updatedCount, skipped: errors.length, errors: errors.slice(0, 200) }, 'Import complete');
 });
@@ -223,9 +226,11 @@ function normalizeSmartRow(row) {
 const productKey = (name, category) =>
   `${String(name || '').trim().toLowerCase()}::${String(category || '').trim().toLowerCase()}`;
 
-// name+category -> { _id, name } for every product in this business (one query)
+// name+category -> { _id, name } for every product in the ACTIVE BRANCH's
+// catalog (one query) — a migration file writes into one specific branch, and
+// "does this product already exist" is evaluated against that branch's catalog.
 async function loadProductIndex(req) {
-  const all = await Product.find(tenantFilter(req, {})).select('name category isActive').lean();
+  const all = await Product.find(branchFilter(req, {})).select('name category isActive').lean();
   const byKey = new Map();
   for (const p of all) {
     const k = productKey(p.name, p.category);
@@ -244,6 +249,8 @@ async function loadProductIndex(req) {
 async function classifyRows(req, valid) {
   const allImeis = [...new Set(valid.flatMap((v) => v.imeis))];
   const imeiSet = new Set(allImeis);
+  // IMEI conflict-detection stays business-wide (not branch-scoped) — a real
+  // device can't be in two branches at once, so a clash anywhere in the shop matters.
   const existingUnits = allImeis.length
     ? await PhoneUnit.find(tenantFilter(req, { $or: [{ imei1: { $in: allImeis } }, { imei2: { $in: allImeis } }, { serial: { $in: allImeis } }] })).populate('product', 'name')
     : [];
@@ -350,7 +357,7 @@ export const smartImportCommit = asyncHandler(async (req, res) => {
     if (productIdByKey.has(k)) { existingProductsGivenImeis++; continue; } // its own fields are never touched
     if (newDocs.has(k)) continue;
     newDocs.set(k, {
-      business: req.businessId, name: data.name, category: data.category,
+      business: req.businessId, branch: req.branchId, name: data.name, category: data.category,
       stock: data.imeis.length ? 0 : data.stock, // synced from real units below when IMEIs are given
       purchasePrice: data.purchasePrice, sellingPrice: data.sellingPrice, discountPercent: data.discountPercent,
       barcode: data.barcode || undefined, sku: data.sku,
@@ -370,6 +377,7 @@ export const smartImportCommit = asyncHandler(async (req, res) => {
   const imeiRows = rows.filter((r) => r.imeis.length);
   if (imeiRows.length) {
     const allCodes = [...new Set(imeiRows.flatMap((r) => r.imeis))];
+    // clash check stays business-wide — a device can't be in two branches at once
     const clashes = await PhoneUnit.find(tenantFilter(req, {
       $or: [{ imei1: { $in: allCodes } }, { imei2: { $in: allCodes } }, { serial: { $in: allCodes } }],
     })).select('imei1 imei2 serial').lean();
@@ -385,21 +393,22 @@ export const smartImportCommit = asyncHandler(async (req, res) => {
         // row only skips the codes truly taken, and repeats inside the file collapse
         if (taken.has(code)) { skippedDuplicateImeis++; continue; }
         taken.add(code);
-        unitDocs.push({ business: req.businessId, product: productId, imei1: code, status: 'in_stock' });
+        unitDocs.push({ business: req.businessId, branch: req.branchId, product: productId, imei1: code, status: 'in_stock' });
       }
     }
     if (unitDocs.length) {
       await PhoneUnit.insertMany(unitDocs);
       addedUnits = unitDocs.length;
       const touched = [...new Set(unitDocs.map((u) => String(u.product)))].map((id) => new mongoose.Types.ObjectId(id));
+      const branchOid = new mongoose.Types.ObjectId(req.branchId);
       const counts = await PhoneUnit.aggregate([
-        { $match: { business: new mongoose.Types.ObjectId(req.businessId), product: { $in: touched }, status: 'in_stock' } },
+        { $match: { business: new mongoose.Types.ObjectId(req.businessId), branch: branchOid, product: { $in: touched }, status: 'in_stock' } },
         { $group: { _id: '$product', n: { $sum: 1 } } },
       ]);
       if (counts.length) {
         await Product.bulkWrite(counts.map((c) => ({
           updateOne: {
-            filter: { _id: c._id, business: new mongoose.Types.ObjectId(req.businessId) },
+            filter: { _id: c._id, business: new mongoose.Types.ObjectId(req.businessId), branch: branchOid },
             update: { $set: { stock: c.n, trackSerial: true } },
           },
         })));
@@ -409,7 +418,7 @@ export const smartImportCommit = asyncHandler(async (req, res) => {
 
   const recordCount = createdProducts + existingProductsGivenImeis;
   await ImportExportLog.create({
-    business: req.businessId, action: 'import', entity: 'smart-products', format: 'auto',
+    business: req.businessId, branch: req.branchId, action: 'import', entity: 'smart-products', format: 'auto',
     recordCount, errorCount: errors.length, createdBy: req.user._id,
   });
   await logActivity(req, {
@@ -433,14 +442,20 @@ export const restoreBackup = asyncHandler(async (req, res) => {
   if (!json || typeof json !== 'object') throw new ApiError(400, 'Invalid backup file');
   const strip = (doc) => { const { _id, business, createdAt, updatedAt, __v, ...rest } = doc; return rest; };
 
+  // a backup's Products carry the branch they were exported from; restoring into
+  // THIS business means that source branch id is meaningless here, so strip it
+  // too and land everything in the currently active branch (like every other
+  // restored/created row) — the owner can move stock between branches by hand afterward.
+  const stripBranch = (doc) => { const { branch, ...rest } = strip(doc); return rest; };
+
   const counts = { products: 0, customers: 0, suppliers: 0, expenses: 0 };
-  for (const p of json.products || []) { await Product.create({ ...strip(p), business: req.businessId }); counts.products++; }
+  for (const p of json.products || []) { await Product.create({ ...stripBranch(p), business: req.businessId, branch: req.branchId }); counts.products++; }
   for (const c of json.customers || []) { await Customer.create({ ...strip(c), business: req.businessId }); counts.customers++; }
   for (const s of json.suppliers || []) { await Supplier.create({ ...strip(s), business: req.businessId }); counts.suppliers++; }
-  for (const e of json.expenses || []) { await Expense.create({ ...strip(e), business: req.businessId }); counts.expenses++; }
+  for (const e of json.expenses || []) { await Expense.create({ ...stripBranch(e), business: req.businessId, branch: req.branchId }); counts.expenses++; }
 
   const recordCount = Object.values(counts).reduce((a, b) => a + b, 0);
-  await ImportExportLog.create({ business: req.businessId, action: 'restore', entity: 'full', format: 'json', recordCount, createdBy: req.user._id });
+  await ImportExportLog.create({ business: req.businessId, branch: req.branchId, action: 'restore', entity: 'full', format: 'json', recordCount, createdBy: req.user._id });
   await logActivity(req, { action: 'RESTORE_BACKUP', entity: 'Business', meta: counts });
   ok(res, { counts }, 'Backup restored (Products, Customers, Suppliers, Expenses)');
 });

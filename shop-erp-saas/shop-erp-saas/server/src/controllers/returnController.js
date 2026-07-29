@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
-import { tenantFilter } from '../middleware/tenant.js';
+import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import { expiredError } from '../utils/expiry.js';
 import Return from '../models/Return.js';
@@ -50,13 +50,13 @@ async function processReturnItems(req, session, sale, requestedItems) {
     if (qty > available) throw new ApiError(400, `Only ${available} unit(s) of "${line.name}" can still be returned`);
 
     if (line.product) {
-      const product = await Product.findOne(tenantFilter(req, { _id: line.product })).session(session);
+      const product = await Product.findOne(branchFilter(req, { _id: line.product })).session(session);
       if (product && product.returnable === false) {
         throw new ApiError(400, `"${product.name}" is marked as not eligible for return/exchange`);
       }
       if (line.unit) {
         // serial-tracked line — qty is always 1, resolve the specific device
-        const unit = await PhoneUnit.findOne(tenantFilter(req, { _id: line.unit })).session(session);
+        const unit = await PhoneUnit.findOne(branchFilter(req, { _id: line.unit })).session(session);
         if (unit) {
           if (condition === 'resellable') {
             unit.status = 'in_stock';
@@ -66,7 +66,7 @@ async function processReturnItems(req, session, sale, requestedItems) {
             unit.status = 'damaged';
           }
           await unit.save({ session });
-          const inStock = await PhoneUnit.countDocuments(tenantFilter(req, { product: product._id, status: 'in_stock' })).session(session);
+          const inStock = await PhoneUnit.countDocuments(branchFilter(req, { product: product._id, status: 'in_stock' })).session(session);
           product.stock = inStock;
         }
       } else if (condition === 'resellable') {
@@ -102,7 +102,7 @@ async function processReturnItems(req, session, sale, requestedItems) {
 // body: { sale, items:[{index, qty, condition}], reason, refundType('refund'|'store_credit'), refundMethod }
 export const createReturn = asyncHandler(async (req, res) => {
   const { sale: saleId, items = [], reason = '', refundType = 'refund', refundMethod = 'cash' } = req.body;
-  const sale = await Sale.findOne(tenantFilter(req, { _id: saleId }));
+  const sale = await Sale.findOne(branchFilter(req, { _id: saleId }));
   if (!sale) throw new ApiError(404, 'Sale not found');
   await assertWithinWindow(req, sale);
 
@@ -132,7 +132,7 @@ export const createReturn = asyncHandler(async (req, res) => {
       }
 
       [returnDoc] = await Return.create([{
-        business: req.businessId, sale: sale._id, invoiceNo: sale.invoiceNo,
+        business: req.businessId, branch: req.branchId, sale: sale._id, invoiceNo: sale.invoiceNo,
         customer: sale.customer, customerName: sale.customerName, type: 'return',
         items: returnDocItems, reason, returnValue, dueReduction, cashRefund, storeCreditIssued,
         refundMethod: method, createdBy: req.user._id,
@@ -156,7 +156,7 @@ export const createExchange = asyncHandler(async (req, res) => {
   } = req.body;
   if (!newItems.length) throw new ApiError(400, 'Select at least one replacement item');
 
-  const oldSale = await Sale.findOne(tenantFilter(req, { _id: saleId }));
+  const oldSale = await Sale.findOne(branchFilter(req, { _id: saleId }));
   if (!oldSale) throw new ApiError(404, 'Sale not found');
   await assertWithinWindow(req, oldSale);
 
@@ -184,7 +184,7 @@ export const createExchange = asyncHandler(async (req, res) => {
       let newSubTotal = 0;
       let newProfit = 0;
       for (const it of newItems) {
-        const product = await Product.findOne(tenantFilter(req, { _id: it.product })).session(session);
+        const product = await Product.findOne(branchFilter(req, { _id: it.product })).session(session);
         if (!product) throw new ApiError(404, `Product not found: ${it.product}`);
         // an exchange hands out a replacement item — same expiry rule as a sale
         const expired = expiredError(product);
@@ -196,7 +196,7 @@ export const createExchange = asyncHandler(async (req, res) => {
           purchasePrice: product.purchasePrice, mrp: product.sellingPrice, discountPercent: pct, sellingPrice: unitPrice,
         };
         if (it.unit) {
-          const unit = await PhoneUnit.findOne(tenantFilter(req, { _id: it.unit })).session(session);
+          const unit = await PhoneUnit.findOne(branchFilter(req, { _id: it.unit })).session(session);
           if (!unit) throw new ApiError(404, 'Selected device unit not found');
           if (unit.status === 'sold') throw new ApiError(400, `Device ${unit.imei1 || unit.serial} is already sold`);
           if (String(unit.product) !== String(product._id)) throw new ApiError(400, 'Unit does not match product');
@@ -221,7 +221,7 @@ export const createExchange = asyncHandler(async (req, res) => {
           unit.warrantyBrandExpiry = line.warrantyBrandExpiry; unit.warrantyShopExpiry = line.warrantyShopExpiry;
           unit.warrantyMonths = wMonths; unit.warrantyExpiry = line.warrantyExpiry;
           await unit.save({ session });
-          const inStock = await PhoneUnit.countDocuments(tenantFilter(req, { product: product._id, status: 'in_stock' })).session(session);
+          const inStock = await PhoneUnit.countDocuments(branchFilter(req, { product: product._id, status: 'in_stock' })).session(session);
           product.stock = inStock;
         } else {
           if (product.stock < line.qty) throw new ApiError(400, `Insufficient stock for ${product.name}`);
@@ -246,7 +246,7 @@ export const createExchange = asyncHandler(async (req, res) => {
       }
 
       [newSale] = await Sale.create([{
-        business: req.businessId, invoiceNo: genInvoiceNo(),
+        business: req.businessId, branch: req.branchId, invoiceNo: genInvoiceNo(),
         customer: oldSale.customer, customerName: oldSale.customerName, customerNid: oldSale.customerNid,
         items: lineItems, subTotal: newSubTotal, discount: 0, total: newSubTotal,
         paid, due, profit: newProfit,
@@ -263,7 +263,7 @@ export const createExchange = asyncHandler(async (req, res) => {
       }
 
       [returnDoc] = await Return.create([{
-        business: req.businessId, sale: oldSale._id, invoiceNo: oldSale.invoiceNo,
+        business: req.businessId, branch: req.branchId, sale: oldSale._id, invoiceNo: oldSale.invoiceNo,
         customer: oldSale.customer, customerName: oldSale.customerName, type: 'exchange',
         items: returnDocItems, reason, returnValue, dueReduction, cashRefund, storeCreditIssued,
         refundMethod: method, exchangeSale: newSale._id, priceDiff, createdBy: req.user._id,
@@ -280,7 +280,7 @@ export const createExchange = asyncHandler(async (req, res) => {
 // @route GET /api/returns?sale=&customer=
 export const getReturns = asyncHandler(async (req, res) => {
   const { sale, customer } = req.query;
-  const q = tenantFilter(req);
+  const q = branchFilter(req);
   if (sale) q.sale = sale;
   if (customer) q.customer = customer;
   const returns = await Return.find(q).sort('-createdAt').limit(200);
@@ -289,7 +289,7 @@ export const getReturns = asyncHandler(async (req, res) => {
 
 // @route GET /api/returns/:id
 export const getReturn = asyncHandler(async (req, res) => {
-  const doc = await Return.findOne(tenantFilter(req, { _id: req.params.id }));
+  const doc = await Return.findOne(branchFilter(req, { _id: req.params.id }));
   if (!doc) throw new ApiError(404, 'Return not found');
   ok(res, { return: doc });
 });

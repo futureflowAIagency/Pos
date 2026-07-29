@@ -14,7 +14,7 @@ import { MODULES } from '../constants/modules.js';
 
 const thisMonth = new Date().toISOString().slice(0, 7);
 const PAGE_SIZE = 8;
-const emptyLogin = { grantLogin: false, permissions: [] };
+const emptyLogin = { grantLogin: false, permissions: [], assignedBranch: '' };
 
 const emptyForm = {
   photo: '', name: '', phone: '', email: '', gender: '', dob: '', designation: 'Staff',
@@ -36,7 +36,7 @@ function Avatar({ name, photo, size = 36 }) {
 }
 
 export default function Employees() {
-  const { business } = useAuth();
+  const { business, branches } = useAuth();
   const isMobile = business?.type === 'mobile';
   const confirm = useConfirm();
   const [employees, setEmployees] = useState([]);
@@ -110,7 +110,7 @@ export default function Employees() {
   const openNew = () => { setForm(emptyForm); setLogin(emptyLogin); setEditId(null); setModal(true); };
   const openEdit = (emp) => {
     setForm({ ...emptyForm, ...emp, dob: toDateInput(emp.dob), joinDate: toDateInput(emp.joinDate) });
-    setLogin({ grantLogin: !!emp.user, permissions: emp.user?.permissions || [] });
+    setLogin({ grantLogin: !!emp.user, permissions: emp.user?.permissions || [], assignedBranch: emp.user?.assignedBranch || '' });
     setEditId(emp._id); setModal(true);
   };
 
@@ -130,6 +130,7 @@ export default function Employees() {
         joinDate: form.joinDate || undefined,
         grantLogin: login.grantLogin,
         permissions: login.permissions,
+        assignedBranch: login.assignedBranch || null,
       };
       delete payload._id; delete payload.salaryHistory; delete payload.createdAt; delete payload.updatedAt; delete payload.user;
       const { data } = editId ? await api.put(`/employees/${editId}`, payload) : await api.post('/employees', payload);
@@ -327,7 +328,7 @@ export default function Employees() {
               </label>
             )}
             {(login.grantLogin || form.user) && (
-              <div>
+              <div className="space-y-3">
                 <p className="text-xs text-slate-400 mb-2">Tick the sections this employee is allowed to see. You can change this anytime.</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {visibleModules.map((m) => (
@@ -337,6 +338,16 @@ export default function Employees() {
                     </label>
                   ))}
                 </div>
+                {branches.length > 1 && (
+                  <div>
+                    <label className="label">Restrict to branch (optional)</label>
+                    <select className="input" value={login.assignedBranch} onChange={(e) => setLogin({ ...login, assignedBranch: e.target.value })}>
+                      <option value="">— Any branch (can switch) —</option>
+                      {branches.filter((b) => b.isActive).map((b) => <option key={b._id} value={b._id}>{b.name}</option>)}
+                    </select>
+                    <p className="text-xs text-slate-400 mt-1">Locks this login to one branch — they won't see or be able to switch to any other branch's data.</p>
+                  </div>
+                )}
               </div>
             )}
           </div>

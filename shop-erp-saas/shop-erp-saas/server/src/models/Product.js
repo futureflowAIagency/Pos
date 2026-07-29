@@ -3,6 +3,9 @@ import mongoose from 'mongoose';
 const productSchema = new mongoose.Schema(
   {
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    // physical branch this product's catalog entry/stock belongs to — separate
+    // catalog per branch, so the same model at two branches is two documents
+    branch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     name: { type: String, required: true, trim: true },
     imageUrl: { type: String, default: '' }, // legacy product photo (UI removed; kept for back-compat)
     sku: { type: String, trim: true },

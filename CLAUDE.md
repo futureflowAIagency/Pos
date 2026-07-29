@@ -5,7 +5,7 @@
 > done, what remains, decisions made, and where each feature lives in the code.
 > **Update this file after every completed phase / meaningful change.**
 
-Last updated: **2026-07-27** — all 10 original phases complete; Phase 11–14 complete; Phase 15 (Scan IMEI with AI) was built then fully removed at client request; a real Products-search bug fix landed; Low Stock Alert pagination fix complete; Phase 16 (Migration Excel template + existing-vs-new IMEI logic + accept/decline review) complete; Phase 17 (keyboard-only POS for Pharmacy — name-search suggestions + Enter chain) complete; Phase 18 (POS quantity step + Shift+Enter to customer + optional customer name/phone) complete; Phase 19 (expired stock warned + blocked from sale) complete; Phase 20 (Smart Stock Import: name-only files now import; template columns no longer silently dropped) complete; Phase 21 (Smart Import bulk-DB rewrite — 550-row uploads no longer time out) complete; Phase 22 (supplier due directly editable) complete; Phase 23 (business type renamed + admin-panel user deletion) complete; **Phase 24 (Products search price panel) also complete** (see §5 change log)
+Last updated: **2026-07-29** — all 10 original phases complete; Phase 11–14 complete; Phase 15 (Scan IMEI with AI) was built then fully removed at client request; a real Products-search bug fix landed; Low Stock Alert pagination fix complete; Phase 16 (Migration Excel template + existing-vs-new IMEI logic + accept/decline review) complete; Phase 17 (keyboard-only POS for Pharmacy — name-search suggestions + Enter chain) complete; Phase 18 (POS quantity step + Shift+Enter to customer + optional customer name/phone) complete; Phase 19 (expired stock warned + blocked from sale) complete; Phase 20 (Smart Stock Import: name-only files now import; template columns no longer silently dropped) complete; Phase 21 (Smart Import bulk-DB rewrite — 550-row uploads no longer time out) complete; Phase 22 (supplier due directly editable) complete; Phase 23 (business type renamed + admin-panel user deletion) complete; Phase 24 (Products search price panel) complete; **Phase 25 (Multi-Branch Support) also complete** (see §5 change log)
 
 ---
 
@@ -411,6 +411,104 @@ building something redundant. They picked the **price panel**.
 - ✅ Two touches specific to this shop's data: cards where both prices are 0 (the ~552 Smart-Imported products) say **"Price not set yet — click to add it"** instead of a bare ৳0, and cards with both prices set show the **per-unit profit**, which is the number the owner actually wants when quoting at the counter.
 - Verified: client `vite build` ✓. Purely additive frontend work — no API, model or table changes.
 
+### ✅ Phase 25 — Multi-Branch Support (2026-07-29)
+Client: *"পস ওয়েবসাইটে ব্রাঞ্চ এড করার সিস্টেম রাখো"* (add a branch-adding system). Before
+building, asked two scope-defining questions since the answer changes the blast radius of
+almost the whole codebase: (1) separate catalog per branch, or one shared catalog with a
+per-branch stock count? (2) is money (Cash/Bank/Expense/Fund) tracked per-branch or shared?
+Client chose **separate catalog per branch** (each branch's products/stock are their own
+documents — lower risk, matches how `business` already works on every model) and **per-branch
+money with an "all branches" combined view for the owner**. Went through `/plan` first given
+the size — two Explore agents mapped the auth/tenant-scoping chokepoint and the Product/
+PhoneUnit/Sale stock-movement path before any code was written.
+
+- ✅ **New `Branch` model** (`server/src/models/Branch.js`): `{business, name, address, phone,
+  isMainBranch, isActive}`. No hard delete in this phase (matches Phase 23's business-delete
+  caution) — only deactivate, and the main branch can't be deactivated (must set another
+  branch as main first).
+- ✅ **`branch` field added to 11 models** — `Product, PhoneUnit, Sale, Purchase, Expense,
+  Fund, Transfer, Installment, ServiceJob, Return, DuePayment` (all required, indexed).
+  `ImportExportLog` gets an optional `branch` (traceability only). `User` gets an optional
+  `assignedBranch` (locks a staff login to one branch, server-enforced). **Deliberately NOT
+  branch-scoped** (shared across all of a business's branches): `Customer`, `Supplier`,
+  `Employee`, CRM/Marketing models, `ActivityLog`, `Notification`, `Payment`/`Subscription`.
+  `Supplier.totalPurchase/totalPaid` stay a combined business-wide running total (the supplier
+  relationship is one external entity even if two branches both buy from them) — but each
+  individual `Purchase` transaction still carries `branch`, so per-branch cash-out is still
+  correctly tracked by the balance engine.
+- ✅ **`server/src/middleware/tenant.js`** gained `resolveBranch` (resolves `req.branchId`:
+  a branch-locked staff's `assignedBranch` always wins over the client-sent header — prevents
+  spoofing; otherwise the `X-Branch-Id` header is validated against the business, falling back
+  to the main branch) and `branchFilter(req, extra)` (= `tenantFilter` + `branch: req.branchId`),
+  used everywhere the 11 models above are queried/created. `requireBusiness` is chained
+  per-route-file (not centralized), so `resolveBranch` was added to that same chain in every
+  route file for a branch-scoped resource: `product/sale/unit/supplier/expense/fund/transfer/
+  installment/service/return/import/dashboard/report/export Routes.js`.
+- ✅ **New `branchController.js` + `branchRoutes.js`** (`/api/branches`, owner/superadmin
+  only) — list/create/update/set-main/toggle-active. Creating a branch here is the literal
+  feature requested.
+- ✅ **Uniqueness nuance**: `Product.barcode` clashes are now checked per-branch (separate
+  catalogs). **`PhoneUnit` IMEI/serial clashes stay business-wide** everywhere (creation-time
+  dedupe in `phoneUnitController`, Smart Import, POS) — a real physical device can't be in two
+  branches at once, so uniqueness holds across the whole shop even though the unit *documents*
+  are branch-tagged. Runtime *availability* lookups (POS scan-to-cart, `/units/lookup`,
+  in-stock search) **are** branch-scoped — a scan at Branch A must never resolve a unit
+  physically sitting in Branch B's stock room.
+- ✅ **Because catalogs are separate per branch, return/exchange/EMI stock reversal needed no
+  new logic** — a Sale's line items already reference that exact branch's Product/PhoneUnit
+  documents, so reversing stock on them is correct by construction. This was the main risk the
+  research flagged for the "shared catalog" option and is exactly why "separate catalog" was
+  the lower-risk pick for a live production app with no local DB to test writes against.
+- ✅ **Migration**: idempotent `ensureMainBranches()` (`server/src/scripts/ensureMainBranches.js`)
+  creates a Main Branch for any business that doesn't have one yet and backfills the 11
+  branch-scoped collections onto it — called automatically once at server boot
+  (`server.js`, after `connectDB()`) since this project can't SSH into the client's VPS to run
+  a one-off migration script by hand; also exposed as `npm run migrate:branches` for manual/CLI
+  use, matching the existing `migrate:images` convention. `createOwnerWithBusiness`
+  (admin-panel "Create Owner") now creates a business's Main Branch at signup time too, so new
+  shops never depend on the startup migration.
+- ✅ **Balances get an "all branches" toggle**: `balanceService.computeBalances(businessId,
+  branchId)` — `branchId=null` aggregates across every branch. `dashboardController`,
+  `reportController` (Advanced Report), and `exportController`'s per-entity exports all accept
+  `?allBranches=true` (owner/superadmin only) to combine instead of showing just the active
+  branch; `Customer`-based figures (totalDue) and Supplier due stay business-wide regardless,
+  since those entities are shared. `exportController.fullBackup` stays fully business-wide on
+  purpose (a backup is the whole account, not one branch) and now also includes `Branch.find`.
+- ✅ **Frontend — header-based, not a per-page filter**: `client/src/api/axios.js` attaches
+  `X-Branch-Id` from `localStorage.activeBranchId` on every request (a per-call header, e.g.
+  Smart Import's branch picker, can override it — the interceptor only fills the header in if
+  the caller hasn't already set one). `AuthContext.jsx`'s `/auth/me` call now also returns
+  `branches` + the resolved `activeBranchId`; `switchBranch(id)` writes to localStorage and
+  does a full page reload (simplest way to guarantee every page's already-fetched data reflects
+  the new branch, without touching each page's individual fetch logic — the actual payoff of
+  the header-based design: POS/Products/Finance/Suppliers/Installments/Services/Returns needed
+  **zero code changes**, they transparently see the active branch's data once the header is
+  set). New branch `<select>` in `Topbar.jsx` (hidden for a branch-locked staff login, and
+  whenever a business only has one branch), active branch name shown under the business name
+  in `Sidebar.jsx`. New **`Branches.jsx`** page (owner/superadmin, `Suppliers.jsx`-style
+  list+modal CRUD) + Sidebar entry. `Employees.jsx`'s "Login Access" section gained an optional
+  "Restrict to branch" select (only shown when the business has >1 branch) mapping to
+  `User.assignedBranch`. `ImportExport.jsx`'s Smart Import gained a branch picker so an owner
+  can import into a specific branch without switching their whole active session.
+- **Explicitly out of scope, flagged for later if asked**: hard-delete of a branch (only
+  deactivate, same reasoning as Phase 23), moving stock *between* branches (`Transfer.js`
+  today is only an internal cash-drawer move between payment methods, not a goods-transfer
+  concept — a real feature if the client wants it), CRM/Marketing branch-scoping (leads/
+  campaigns aren't tied to a shelf, stay business-wide).
+- Verified: `node --check` across the **entire** server source tree (not just touched files) +
+  full `app.js` import-chain ✓; a standalone logic-fixture test of `resolveBranch`'s precedence
+  rules (7/7 cases: header honored, invalid/foreign/inactive header falls back to main,
+  assigned-branch lock overrides any header) ✓; a standalone idempotency simulation of
+  `ensureMainBranches()` (first run only touches businesses lacking a branch, second run is a
+  true no-op) ✓; client `vite build` ✓. Not exercised against a live database — same standing
+  limitation as every prior phase (only the client's production Atlas is configured, no local
+  MongoDB) — but this is by a wide margin the largest single change to this codebase, so it's
+  worth being explicit: the write paths (branch creation, the migration backfill, every
+  `branchFilter`-scoped query) are verified by construction and logic review, not by an actual
+  insert/query against real data. **Recommend the client do a careful first pass in the live
+  app** — add a second branch, confirm Products/POS/Finance genuinely separate from the
+  original Main Branch — before relying on this for real multi-location operation.
+
 ---
 
 ## 4. Cross-cutting decisions & conventions
@@ -447,6 +545,7 @@ building something redundant. They picked the **price panel**.
 - **2026-07-18** — **Phase 15 built, then fully removed at client request.** Built "Scan IMEI with AI" (vision-AI photo read + fuzzy product match) then a hardware-scanner variant (IMEI TAC-prefix match against the shop's own units) after the client clarified their actual device — see §3 Phase 15 for the full history. Client then asked to drop the whole feature; reverted cleanly (both endpoints, both controller functions, the vision-AI additions in `aiService.js`, the `DataTable.rowClassName` prop, all related `Products.jsx` state/UI — nothing left behind). Along the way, found and fixed a real bug: Products search never matched IMEI/serial (only name/sku/barcode), so a known in-stock IMEI returned "No data found" — `getProducts` now also looks up matching `PhoneUnit`s. Server import-chain + client build verified after both the removal and the fix.
 - **2026-07-14** — **Barcode system scoped per business type (client instruction).** Client asked: General shops should get the *same* unique-per-unit barcode system as Mobile shops (previously general-store products always printed one shared barcode × quantity, since only `business.type==='mobile'` unlocked `trackSerial`/unit-tracking in the UI); Pharmacy should have **no barcode system at all**. Changes (frontend-only, `Product.trackSerial` was already generic in the schema): `Products.jsx` — new `serialEnabled = business.type !== 'pharmacy'` gate controls the barcode field, scan-to-add box, "Print Label" action/button, and the "track by unique code" checkbox (previously `isMobile`-only); `isMobile` is now only used for the phone-specific fields (brand/storage/color/warranty) and wording ("IMEI" vs generic "unique code"). `UnitsModal` takes an `isMobile` prop and shows the full IMEI1/IMEI2/Serial layout for Mobile or a single generic "Unique Code" field/column for General. `LabelPrintModal` takes `isMobile` too, for the same wording split. `POS.jsx`: unit/IMEI search and the "matching units" grid now gate on `supportsUnits = business.type !== 'pharmacy'` instead of `isMobile`, so General-shop unit codes are searchable/scannable at the register too. No backend/model changes were needed. Client build ✓, committed + pushed.
 - **2026-07-25** — **Low Stock Alert pagination fix.** Client sent 2 screenshots (no text prompt) showing the Dashboard's "Low Stock Alert" widget and the Products list full of Smart-Import stock (mostly ৳0 price, many 0/low stock counts). Asked a clarifying question since intent wasn't obvious from images alone — client confirmed: the widget was silently capping at a handful of items when there are actually many low/zero-stock products (from the big Smart Import batches), and it should show/paginate all of them instead. Fix: `dashboardController.js` no longer slices `lowStockProducts` to 8 — returns the full list; `Dashboard.jsx` paginates it client-side (8/page, prev/next, item count badge, same pattern as `Employees.jsx`), resetting to page 1 whenever the period filter changes. Server import-chain + client build verified.
+- **2026-07-29** — **Phase 25 done — Multi-Branch Support.** New `Branch` model; `branch` added to Product/PhoneUnit/Sale/Purchase/Expense/Fund/Transfer/Installment/ServiceJob/Return/DuePayment (separate catalog + separate till per branch, per the client's explicit choice); `User.assignedBranch` locks a staff login to one branch server-side. New `resolveBranch` middleware + `branchFilter` helper (mirrors the existing `tenantFilter` pattern) wired into every branch-scoped route. Idempotent startup migration creates a Main Branch for any pre-existing business. Balances/Dashboard/Advanced-Report/Exports gained an owner-only "all branches combined" toggle. Frontend is header-based (`X-Branch-Id`), so POS/Products/Finance/Suppliers/Installments/Services/Returns needed zero page-level code changes — only a new branch switcher (Topbar), a new Branches management page, and two small additions (Employees' branch-restriction select, Smart Import's target-branch picker). Went through `/plan` first with two Explore agents given the size; the client's "separate catalog per branch" choice is what kept return/EMI/exchange stock-reversal logic unchanged (branch is implied by which Product document a Sale already references). Verified across the whole server tree + a 7-case resolveBranch precedence test + a migration-idempotency simulation + client build; recommended the client test a second branch live before relying on it. See §3 Phase 25.
 - **2026-07-27** — **Phase 24 done — Products search now shows buy/sell price up front.** Searching by name renders a card grid above the table with Buy, Sell (discount-aware) and Stock per match, capped at 6, each card opening that product's Edit modal. Imported products with no price say "Price not set yet" instead of showing ৳0, and priced items show per-unit profit. Asked the client to choose between four readings first, since the table already had Buy/Sell columns. Frontend-only. See §3 Phase 24.
 - **2026-07-27** — **Phase 23 done — business-type renamed + user deletion in the Admin Panel.** "Mobile Shop Management" is now labelled **"Technology Management System"** (label only — the stored `type: 'mobile'` value and all mobile-module gating are unchanged; the Bangla translation key moved with the English string). New superadmin-only `DELETE /api/admin/businesses/:id` removes the owner login, all staff logins, the business and its data, wiping every collection whose schema has a `business` path (verified: 28 models covered, only `Business` excluded and deleted explicitly) — with guards against deleting a superadmin or the admin's own account. The popup requires typing the business name before the red Delete button arms, and points at Deactivate as the reversible option. See §3 Phase 23.
 - **2026-07-26** — **Phase 22 done — supplier due is directly editable.** New `PATCH /suppliers/:id/due` sets the due to an exact figure by moving `totalPurchase` to `totalPaid + target` (the due is a virtual, and real money paid must stay recorded), logging the signed difference as a new `Purchase` kind `'adjustment'` with `paid: 0` — chosen after auditing every `Purchase` aggregation so it can't inflate purchase reports (they filter `kind:'purchase'`) or shift Cash/Bank balances (they sum `paid`). New per-row "Edit due" modal shows the current due, a live increase/decrease hint, a reason note, and an amber warning that this is a correction, not a payment; the ledger badges it as "Due correction" with a signed amount. Record Purchase and Pay due are untouched. Arithmetic verified across 5 supplier states incl. an over-paid one. See §3 Phase 22.

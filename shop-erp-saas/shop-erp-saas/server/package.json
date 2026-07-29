@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "seed": "node src/seed/seed.js",
-    "migrate:images": "node src/scripts/migrateImagesToCloudinary.js"
+    "migrate:images": "node src/scripts/migrateImagesToCloudinary.js",
+    "migrate:branches": "node src/scripts/ensureMainBranches.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",

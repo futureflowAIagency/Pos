@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 const duePaymentSchema = new mongoose.Schema(
   {
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    branch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', default: null },
     // the specific invoice this payment settles (optional — customer-level
     // collections spread across invoices leave this null)

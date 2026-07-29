@@ -2,13 +2,13 @@ import { Router } from 'express';
 import multer from 'multer';
 import { downloadTemplate, validateImport, commitImport, restoreBackup, smartImportPreview, smartImportCommit } from '../controllers/importController.js';
 import { protect } from '../middleware/auth.js';
-import { requireBusiness } from '../middleware/tenant.js';
+import { requireBusiness, resolveBranch } from '../middleware/tenant.js';
 import { authorize } from '../middleware/role.js';
 import { requireModule } from '../middleware/permissions.js';
 import { uploadDataFile } from '../middleware/upload.js';
 
 const router = Router();
-router.use(protect, requireBusiness, requireModule('import-export'));
+router.use(protect, requireBusiness, resolveBranch, requireModule('import-export'));
 const ownerOnly = authorize('owner', 'superadmin');
 
 // Turn multer's own errors (e.g. file too large) into clean 400 responses.

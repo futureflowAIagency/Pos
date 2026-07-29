@@ -1,7 +1,7 @@
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
-import { tenantFilter } from '../middleware/tenant.js';
+import { branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import Transfer from '../models/Transfer.js';
 
@@ -9,7 +9,7 @@ const METHODS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
 
 // @route GET /api/transfers  — balance-transfer history
 export const getTransfers = asyncHandler(async (req, res) => {
-  const transfers = await Transfer.find(tenantFilter(req)).sort('-date');
+  const transfers = await Transfer.find(branchFilter(req)).sort('-date');
   ok(res, { transfers, count: transfers.length });
 });
 
@@ -22,6 +22,7 @@ export const createTransfer = asyncHandler(async (req, res) => {
 
   const transfer = await Transfer.create({
     business: req.businessId,
+    branch: req.branchId,
     fromMethod, toMethod,
     amount: Number(amount),
     note,
@@ -34,7 +35,7 @@ export const createTransfer = asyncHandler(async (req, res) => {
 
 // @route DELETE /api/transfers/:id
 export const deleteTransfer = asyncHandler(async (req, res) => {
-  const transfer = await Transfer.findOneAndDelete(tenantFilter(req, { _id: req.params.id }));
+  const transfer = await Transfer.findOneAndDelete(branchFilter(req, { _id: req.params.id }));
   if (!transfer) throw new ApiError(404, 'Transfer not found');
   await logActivity(req, { action: 'DELETE_TRANSFER', entity: 'Transfer', entityId: req.params.id });
   ok(res, {}, 'Transfer deleted');

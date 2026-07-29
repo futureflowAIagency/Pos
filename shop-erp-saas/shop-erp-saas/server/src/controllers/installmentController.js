@@ -1,7 +1,7 @@
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
-import { tenantFilter } from '../middleware/tenant.js';
+import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import Installment from '../models/Installment.js';
 import Customer from '../models/Customer.js';
@@ -18,7 +18,7 @@ const KYC_FIELDS = [
 // @route GET /api/installments?status=
 export const getInstallments = asyncHandler(async (req, res) => {
   const { status } = req.query;
-  const q = tenantFilter(req);
+  const q = branchFilter(req);
   if (status) q.status = status;
   const installments = await Installment.find(q).sort('-createdAt');
   const emiReceivable = installments.filter((i) => i.status === 'active').reduce((s, i) => s + i.balance, 0);
@@ -27,7 +27,7 @@ export const getInstallments = asyncHandler(async (req, res) => {
 
 // @route GET /api/installments/:id
 export const getInstallment = asyncHandler(async (req, res) => {
-  const installment = await Installment.findOne(tenantFilter(req, { _id: req.params.id }));
+  const installment = await Installment.findOne(branchFilter(req, { _id: req.params.id }));
   if (!installment) throw new ApiError(404, 'Installment plan not found');
   ok(res, { installment });
 });
@@ -58,12 +58,12 @@ export const createInstallment = asyncHandler(async (req, res) => {
   let unitDoc = null;
   let imei1 = '', imei2 = '', serial = '';
   if (product) {
-    prodDoc = await Product.findOne(tenantFilter(req, { _id: product }));
+    prodDoc = await Product.findOne(branchFilter(req, { _id: product }));
     if (!prodDoc) throw new ApiError(404, 'Product not found');
 
     if (prodDoc.trackSerial) {
       if (!unit) throw new ApiError(400, 'Select a device (IMEI/serial) for this serial-tracked product');
-      unitDoc = await PhoneUnit.findOne(tenantFilter(req, { _id: unit }));
+      unitDoc = await PhoneUnit.findOne(branchFilter(req, { _id: unit }));
       if (!unitDoc) throw new ApiError(404, 'Device unit not found');
       if (unitDoc.status === 'sold') throw new ApiError(400, `Device ${unitDoc.imei1 || unitDoc.serial} is already sold`);
       if (String(unitDoc.product) !== String(prodDoc._id)) throw new ApiError(400, 'Unit does not match product');
@@ -92,6 +92,7 @@ export const createInstallment = asyncHandler(async (req, res) => {
 
   const installment = await Installment.create({
     business: req.businessId,
+    branch: req.branchId,
     customer, customerName, productName, sale,
     product: prodDoc?._id || null, unit: unitDoc?._id || null, imei1, imei2, serial,
     totalAmount: total, downPayment: down,
@@ -118,8 +119,8 @@ export const createInstallment = asyncHandler(async (req, res) => {
     unitDoc.warrantyMonths = Math.max(brandMonths, shopMonths);
     unitDoc.warrantyExpiry = unitDoc.warrantyMonths > 0 ? new Date(Date.now() + unitDoc.warrantyMonths * MONTH) : null;
     await unitDoc.save();
-    const inStock = await PhoneUnit.countDocuments(tenantFilter(req, { product: prodDoc._id, status: 'in_stock' }));
-    await Product.updateOne(tenantFilter(req, { _id: prodDoc._id }), { stock: inStock });
+    const inStock = await PhoneUnit.countDocuments(branchFilter(req, { product: prodDoc._id, status: 'in_stock' }));
+    await Product.updateOne(branchFilter(req, { _id: prodDoc._id }), { stock: inStock });
   } else if (prodDoc) {
     prodDoc.stock = Math.max(0, prodDoc.stock - 1);
     await prodDoc.save();
@@ -132,7 +133,7 @@ export const createInstallment = asyncHandler(async (req, res) => {
 // @route PATCH /api/installments/:id/pay  body: { no, method }  -> mark one instalment paid
 export const payInstallment = asyncHandler(async (req, res) => {
   const { no, method = 'cash' } = req.body;
-  const installment = await Installment.findOne(tenantFilter(req, { _id: req.params.id }));
+  const installment = await Installment.findOne(branchFilter(req, { _id: req.params.id }));
   if (!installment) throw new ApiError(404, 'Installment plan not found');
   const row = installment.schedule.find((s) => s.no === Number(no));
   if (!row) throw new ApiError(404, 'Instalment not found');
@@ -148,7 +149,7 @@ export const payInstallment = asyncHandler(async (req, res) => {
 
 // @route DELETE /api/installments/:id
 export const deleteInstallment = asyncHandler(async (req, res) => {
-  const installment = await Installment.findOneAndDelete(tenantFilter(req, { _id: req.params.id }));
+  const installment = await Installment.findOneAndDelete(branchFilter(req, { _id: req.params.id }));
   if (!installment) throw new ApiError(404, 'Installment plan not found');
   await logActivity(req, { action: 'DELETE_INSTALLMENT', entity: 'Installment', entityId: installment._id });
   ok(res, {}, 'Installment plan deleted');

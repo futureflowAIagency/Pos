@@ -33,10 +33,16 @@ function resolveRange(period = 'monthly', from, to) {
   return { from: start, to: end };
 }
 
-// @route GET /api/dashboard/summary?period=&from=&to=
+// @route GET /api/dashboard/summary?period=&from=&to=&allBranches=true
+// `allBranches` (owner/superadmin only) combines every branch instead of just
+// the active one — everything below is branch-scoped by default since Products/
+// Sales/Expenses/Service jobs/Installments are all per-branch; Customers/
+// Employees/ActivityLog stay business-wide regardless (shared across branches).
 export const dashboardSummary = asyncHandler(async (req, res) => {
   const bId = new mongoose.Types.ObjectId(req.businessId);
   const { period = 'monthly', from, to } = req.query;
+  const allBranches = req.query.allBranches === 'true' && ['owner', 'superadmin'].includes(req.user.role);
+  const bMatch = allBranches ? {} : { branch: new mongoose.Types.ObjectId(req.branchId) };
   const range = resolveRange(period, from, to);
   const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
@@ -45,18 +51,19 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
 
   const [salesAgg, todayAgg, expenseAgg, products, dueAgg, employeesCount, topProducts, recentOrders, paymentAgg, recentActivities, periodSalesAgg, periodExpenseAgg, balances, periodServiceAgg, activeEmis, recentSalesByProduct] = await Promise.all([
     Sale.aggregate([
-      { $match: { business: bId, createdAt: { $gte: startOfMonth } } },
+      { $match: { business: bId, ...bMatch, createdAt: { $gte: startOfMonth } } },
       { $group: { _id: null, revenue: { $sum: '$total' }, profit: { $sum: '$profit' }, count: { $sum: 1 } } },
     ]),
     Sale.aggregate([
-      { $match: { business: bId, createdAt: { $gte: startOfToday } } },
+      { $match: { business: bId, ...bMatch, createdAt: { $gte: startOfToday } } },
       { $group: { _id: null, revenue: { $sum: '$total' }, count: { $sum: 1 } } },
     ]),
     Expense.aggregate([
-      { $match: { business: bId, date: { $gte: startOfMonth } } },
+      { $match: { business: bId, ...bMatch, date: { $gte: startOfMonth } } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]),
-    Product.find({ business: bId, isActive: true }),
+    Product.find({ business: bId, ...bMatch, isActive: true }),
+    // Customer dues stay business-wide — Customer is shared across branches
     Customer.aggregate([
       { $match: { business: bId } },
       { $group: { _id: null, totalDue: { $sum: '$totalDue' } } },
@@ -64,37 +71,37 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
     Employee.countDocuments({ business: bId, isActive: true }),
     // Top selling products this month (by qty sold)
     Sale.aggregate([
-      { $match: { business: bId, createdAt: { $gte: startOfMonth } } },
+      { $match: { business: bId, ...bMatch, createdAt: { $gte: startOfMonth } } },
       { $unwind: '$items' },
       { $group: { _id: '$items.name', qty: { $sum: '$items.qty' }, revenue: { $sum: { $multiply: ['$items.qty', '$items.sellingPrice'] } } } },
       { $sort: { qty: -1 } },
       { $limit: 5 },
     ]),
     // Recent orders
-    Sale.find({ business: bId }).sort('-createdAt').limit(6).select('invoiceNo customerName total paymentMethod createdAt'),
+    Sale.find({ business: bId, ...bMatch }).sort('-createdAt').limit(6).select('invoiceNo customerName total paymentMethod createdAt'),
     // Payment method breakdown this month
     Sale.aggregate([
-      { $match: { business: bId, createdAt: { $gte: startOfMonth } } },
+      { $match: { business: bId, ...bMatch, createdAt: { $gte: startOfMonth } } },
       { $group: { _id: '$paymentMethod', total: { $sum: '$total' }, count: { $sum: 1 } } },
       { $sort: { total: -1 } },
     ]),
-    // Recent activity log
+    // Recent activity log — business-wide (not branch-scoped)
     ActivityLog.find({ business: bId }).sort('-createdAt').limit(7).populate('user', 'name'),
     // Period-scoped sales (respects the dashboard date filter)
     Sale.aggregate([
-      { $match: { business: bId, createdAt: { $gte: range.from, $lte: range.to } } },
+      { $match: { business: bId, ...bMatch, createdAt: { $gte: range.from, $lte: range.to } } },
       { $group: { _id: null, revenue: { $sum: '$total' }, profit: { $sum: '$profit' }, count: { $sum: 1 } } },
     ]),
     // Period-scoped expenses
     Expense.aggregate([
-      { $match: { business: bId, date: { $gte: range.from, $lte: range.to } } },
+      { $match: { business: bId, ...bMatch, date: { $gte: range.from, $lte: range.to } } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]),
     // Cumulative per-method balances (cash/bank/bkash/nagad/rocket/card)
-    computeBalances(req.businessId),
+    computeBalances(req.businessId, allBranches ? null : req.branchId),
     // Period-scoped Service & Repair financials (req 9)
     ServiceJob.aggregate([
-      { $match: { business: bId, createdAt: { $gte: range.from, $lte: range.to } } },
+      { $match: { business: bId, ...bMatch, createdAt: { $gte: range.from, $lte: range.to } } },
       { $group: {
         _id: null,
         revenue: { $sum: '$total' },
@@ -105,11 +112,11 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
       } },
     ]),
     // Active EMI plans — summed in JS (uses the `balance` virtual) for EMI Receivable (req 10)
-    Installment.find({ business: bId, status: 'active' }),
+    Installment.find({ business: bId, ...bMatch, status: 'active' }),
     // Qty sold + last-sold date per product over the last 90 days — feeds the
     // slow-moving/dead-stock box (products barely selling despite being in stock)
     Sale.aggregate([
-      { $match: { business: bId, createdAt: { $gte: ninetyDaysAgo } } },
+      { $match: { business: bId, ...bMatch, createdAt: { $gte: ninetyDaysAgo } } },
       { $unwind: '$items' },
       { $match: { 'items.product': { $ne: null } } },
       { $group: { _id: '$items.product', qtySold: { $sum: '$items.qty' }, lastSoldAt: { $max: '$createdAt' } } },
@@ -231,10 +238,12 @@ export const aiSummary = asyncHandler(async (req, res) => {
 // @route GET /api/dashboard/revenue-chart  (last 7 days)
 export const revenueChart = asyncHandler(async (req, res) => {
   const bId = new mongoose.Types.ObjectId(req.businessId);
+  const allBranches = req.query.allBranches === 'true' && ['owner', 'superadmin'].includes(req.user.role);
+  const bMatch = allBranches ? {} : { branch: new mongoose.Types.ObjectId(req.branchId) };
   const start = new Date(); start.setDate(start.getDate() - 6); start.setHours(0, 0, 0, 0);
 
   const data = await Sale.aggregate([
-    { $match: { business: bId, createdAt: { $gte: start } } },
+    { $match: { business: bId, ...bMatch, createdAt: { $gte: start } } },
     {
       $group: {
         _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },

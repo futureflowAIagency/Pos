@@ -4,6 +4,9 @@ import mongoose from 'mongoose';
 const importExportLogSchema = new mongoose.Schema(
   {
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
+    // which branch an import/export targeted — optional, since some actions
+    // (full backup, business-wide export) aren't tied to one branch
+    branch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', default: null },
     action: { type: String, enum: ['import', 'export', 'backup', 'restore'], required: true },
     entity: { type: String, required: true }, // 'customers' | 'suppliers' | 'products' | 'units' | 'expenses' | 'sales' | 'purchases' | 'installments' | 'dues' | 'full'
     format: { type: String, enum: ['csv', 'json'], default: 'csv' },
