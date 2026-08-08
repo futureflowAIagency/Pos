@@ -25,6 +25,7 @@ import exportRoutes from './exportRoutes.js';
 import importRoutes from './importRoutes.js';
 import transferRoutes from './transferRoutes.js';
 import branchRoutes from './branchRoutes.js';
+import { getAppVersion } from '../utils/appVersion.js';
 
 const router = Router();
 
@@ -57,5 +58,8 @@ router.use('/transfers', transferRoutes);
 router.use('/branches', branchRoutes);
 
 router.get('/health', (req, res) => res.json({ success: true, message: 'API healthy', ts: Date.now() }));
+// Public (no auth) — the Sidebar polls this to notice a fresh deploy and
+// prompt "Relaunch to update" without needing a logged-in session to check.
+router.get('/version', (req, res) => res.json({ success: true, data: getAppVersion() }));
 
 export default router;
