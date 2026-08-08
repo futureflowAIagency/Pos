@@ -5,7 +5,7 @@
 > done, what remains, decisions made, and where each feature lives in the code.
 > **Update this file after every completed phase / meaningful change.**
 
-Last updated: **2026-07-29** — all 10 original phases complete; Phase 11–14 complete; Phase 15 (Scan IMEI with AI) was built then fully removed at client request; a real Products-search bug fix landed; Low Stock Alert pagination fix complete; Phase 16 (Migration Excel template + existing-vs-new IMEI logic + accept/decline review) complete; Phase 17 (keyboard-only POS for Pharmacy — name-search suggestions + Enter chain) complete; Phase 18 (POS quantity step + Shift+Enter to customer + optional customer name/phone) complete; Phase 19 (expired stock warned + blocked from sale) complete; Phase 20 (Smart Stock Import: name-only files now import; template columns no longer silently dropped) complete; Phase 21 (Smart Import bulk-DB rewrite — 550-row uploads no longer time out) complete; Phase 22 (supplier due directly editable) complete; Phase 23 (business type renamed + admin-panel user deletion) complete; Phase 24 (Products search price panel) complete; **Phase 25 (Multi-Branch Support) also complete** (see §5 change log)
+Last updated: **2026-08-03** — all 10 original phases complete; Phase 11–14 complete; Phase 15 (Scan IMEI with AI) was built then fully removed at client request; a real Products-search bug fix landed; Low Stock Alert pagination fix complete; Phase 16 (Migration Excel template + existing-vs-new IMEI logic + accept/decline review) complete; Phase 17 (keyboard-only POS for Pharmacy — name-search suggestions + Enter chain) complete; Phase 18 (POS quantity step + Shift+Enter to customer + optional customer name/phone) complete; Phase 19 (expired stock warned + blocked from sale) complete; Phase 20 (Smart Stock Import: name-only files now import; template columns no longer silently dropped) complete; Phase 21 (Smart Import bulk-DB rewrite — 550-row uploads no longer time out) complete; Phase 22 (supplier due directly editable) complete; Phase 23 (business type renamed + admin-panel user deletion) complete; Phase 24 (Products search price panel) complete; Phase 25 (Multi-Branch Support) complete; **Phase 26 (customer due-date reminders + a real notification system) also complete** (see §5 change log)
 
 ---
 
@@ -509,6 +509,57 @@ PhoneUnit/Sale stock-movement path before any code was written.
   app** — add a second branch, confirm Products/POS/Finance genuinely separate from the
   original Main Branch — before relying on this for real multi-location operation.
 
+### ✅ Phase 26 — Customer due-date reminders + a real notification system (2026-08-03)
+Client sent an annotated screenshot of the Customers page: wants (1) a settable/editable
+**due date** per customer that raises a notification when it arrives, and (2) flagged that the
+notification bell has never done anything — asked for low/out-of-stock alerts there too.
+Investigation confirmed the bell was fully inert: `Notification` model + `GET/PATCH
+/api/notifications` already existed from an earlier phase, but **nothing anywhere in the
+codebase ever created a Notification document** — a dead read-only API behind a decorative
+icon with no `onClick`, no badge, no dropdown. Customers also had no edit capability at all
+(only Add) despite the server's `updateCustomer` already existing.
+- ✅ **`Customer.dueDate`** (optional Date) — a reminder date, independent of any specific
+  invoice's due date. Cleared automatically back to `null` once `totalDue` reaches 0 via either
+  due-collection path (`customerController.collectDue` and `saleController.collectSaleDue`) —
+  a paid-off customer stops nagging.
+- ✅ **No cron/scheduler exists anywhere in this project**, and adding one (e.g. `node-cron`)
+  would be the first background process this app has ever needed — for a small shop's check-in
+  pattern, a **lazily-computed, idempotent generator** is simpler and just as timely: new
+  `server/src/services/notificationService.js`'s `ensureNotifications(req)` runs every time
+  `GET /notifications` is called (i.e. whenever the bell is opened, plus a 3-minute client poll
+  for the badge), not on a timer.
+- ✅ **Idempotent via a `dedupeKey`** field added to `Notification` (`stock-<productId>` /
+  `due-<customerId>-<dueDateISODate>`) — re-checking the same still-true condition never creates
+  a duplicate. Low-stock notices for a product that gets restocked are actively **pruned** (only
+  while still unread — read ones stay as history, same treatment as every other log in this app)
+  so the unread badge never lies. A due-date reminder is keyed to the date *value*, not "today" —
+  editing the reminder to a new date can raise a fresh notice, but reopening the bell on the same
+  overdue date never spams a second one.
+- ✅ **Branch-aware, matching Phase 25's model**: `Notification` gained an optional `branch`
+  field. Low-stock checks only scan the *active* branch's products (Product is branch-scoped
+  since Phase 25) and stamp `branch` on the notice; due-date reminders have `branch: null`
+  (Customer is shared business-wide) and always show regardless of active branch.
+  `notificationRoutes.js` gained `resolveBranch` in its chain; both `getNotifications` and
+  `markRead` filter/act on `{branch: null} OR {branch: activeBranchId}` — switching branches
+  never reveals or silently clears another branch's stock alerts.
+- ✅ **New `client/src/components/layout/NotificationBell.jsx`** replaces the dead `<Bell>`
+  button in `Topbar.jsx`: unread-count badge, a dropdown list (type-colored icon, title,
+  message, timestamp), "Mark all as read", fetches on mount + a 3-minute refresh + every time
+  it's opened. No new UI library — a plain fixed-backdrop dropdown, same click-outside idiom
+  `Modal.jsx` already uses.
+- ✅ **`Customers.jsx`**: the Add-only modal became Add/Edit (new Pencil action per row, mirrors
+  every other list page in this app) with a new **Due Date** field; the Due column shows the
+  reminder date under the amount, in red once it's reached.
+- Verified: `node --check` across the entire server tree + full `app.js` import-chain ✓; a
+  5-case logic-fixture test of the dedupe/prune rules (no duplicate on repeat check, restock
+  prunes the unread notice, dropping low again raises a fresh one, same due-date never
+  duplicates, an edited due-date does) ✓; client `vite build` ✓. Not exercised against a live
+  database — same standing limitation as every prior phase.
+- **Scope note:** only low/out-of-stock and customer due-date generate notifications in this
+  pass — the client didn't ask for more, and the `ensureNotifications` pattern makes adding
+  another kind (e.g. EMI instalment due, subscription expiry) a small addition later, not a
+  redesign.
+
 ---
 
 ## 4. Cross-cutting decisions & conventions
@@ -545,6 +596,7 @@ PhoneUnit/Sale stock-movement path before any code was written.
 - **2026-07-18** — **Phase 15 built, then fully removed at client request.** Built "Scan IMEI with AI" (vision-AI photo read + fuzzy product match) then a hardware-scanner variant (IMEI TAC-prefix match against the shop's own units) after the client clarified their actual device — see §3 Phase 15 for the full history. Client then asked to drop the whole feature; reverted cleanly (both endpoints, both controller functions, the vision-AI additions in `aiService.js`, the `DataTable.rowClassName` prop, all related `Products.jsx` state/UI — nothing left behind). Along the way, found and fixed a real bug: Products search never matched IMEI/serial (only name/sku/barcode), so a known in-stock IMEI returned "No data found" — `getProducts` now also looks up matching `PhoneUnit`s. Server import-chain + client build verified after both the removal and the fix.
 - **2026-07-14** — **Barcode system scoped per business type (client instruction).** Client asked: General shops should get the *same* unique-per-unit barcode system as Mobile shops (previously general-store products always printed one shared barcode × quantity, since only `business.type==='mobile'` unlocked `trackSerial`/unit-tracking in the UI); Pharmacy should have **no barcode system at all**. Changes (frontend-only, `Product.trackSerial` was already generic in the schema): `Products.jsx` — new `serialEnabled = business.type !== 'pharmacy'` gate controls the barcode field, scan-to-add box, "Print Label" action/button, and the "track by unique code" checkbox (previously `isMobile`-only); `isMobile` is now only used for the phone-specific fields (brand/storage/color/warranty) and wording ("IMEI" vs generic "unique code"). `UnitsModal` takes an `isMobile` prop and shows the full IMEI1/IMEI2/Serial layout for Mobile or a single generic "Unique Code" field/column for General. `LabelPrintModal` takes `isMobile` too, for the same wording split. `POS.jsx`: unit/IMEI search and the "matching units" grid now gate on `supportsUnits = business.type !== 'pharmacy'` instead of `isMobile`, so General-shop unit codes are searchable/scannable at the register too. No backend/model changes were needed. Client build ✓, committed + pushed.
 - **2026-07-25** — **Low Stock Alert pagination fix.** Client sent 2 screenshots (no text prompt) showing the Dashboard's "Low Stock Alert" widget and the Products list full of Smart-Import stock (mostly ৳0 price, many 0/low stock counts). Asked a clarifying question since intent wasn't obvious from images alone — client confirmed: the widget was silently capping at a handful of items when there are actually many low/zero-stock products (from the big Smart Import batches), and it should show/paginate all of them instead. Fix: `dashboardController.js` no longer slices `lowStockProducts` to 8 — returns the full list; `Dashboard.jsx` paginates it client-side (8/page, prev/next, item count badge, same pattern as `Employees.jsx`), resetting to page 1 whenever the period filter changes. Server import-chain + client build verified.
+- **2026-08-03** — **Phase 26 done — customer due-date reminders + a real notification system.** Client's screenshot flagged the notification bell as a dead decorative icon (it was — `Notification` model + `/api/notifications` existed since an earlier phase, but nothing anywhere ever created a Notification document, and the bell had no onClick/badge/dropdown at all) and asked for a customer due-date field. Added `Customer.dueDate` (cleared automatically once totalDue hits 0, via both due-collection paths). Since this project has no cron/scheduler anywhere, built a lazily-computed, idempotent `ensureNotifications()` (`server/src/services/notificationService.js`) that runs whenever `GET /notifications` is called instead of on a timer — dedupes via a new `dedupeKey` field so the same still-true condition never duplicates, and prunes stale unread low-stock notices once a product is restocked. Low-stock checks are branch-scoped (Product is per-branch since Phase 25); due-date reminders are business-wide (Customer is shared). New `NotificationBell.jsx` replaces the dead bell in `Topbar.jsx` — unread badge, dropdown, mark-all-read, polls every 3 minutes. `Customers.jsx`'s Add-only modal became Add/Edit (it had no edit capability at all before this) with the new Due Date field. Verified across the whole server tree + import-chain + a 5-case dedupe/prune logic test + client build. See §3 Phase 26.
 - **2026-07-29** — **Phase 25 done — Multi-Branch Support.** New `Branch` model; `branch` added to Product/PhoneUnit/Sale/Purchase/Expense/Fund/Transfer/Installment/ServiceJob/Return/DuePayment (separate catalog + separate till per branch, per the client's explicit choice); `User.assignedBranch` locks a staff login to one branch server-side. New `resolveBranch` middleware + `branchFilter` helper (mirrors the existing `tenantFilter` pattern) wired into every branch-scoped route. Idempotent startup migration creates a Main Branch for any pre-existing business. Balances/Dashboard/Advanced-Report/Exports gained an owner-only "all branches combined" toggle. Frontend is header-based (`X-Branch-Id`), so POS/Products/Finance/Suppliers/Installments/Services/Returns needed zero page-level code changes — only a new branch switcher (Topbar), a new Branches management page, and two small additions (Employees' branch-restriction select, Smart Import's target-branch picker). Went through `/plan` first with two Explore agents given the size; the client's "separate catalog per branch" choice is what kept return/EMI/exchange stock-reversal logic unchanged (branch is implied by which Product document a Sale already references). Verified across the whole server tree + a 7-case resolveBranch precedence test + a migration-idempotency simulation + client build; recommended the client test a second branch live before relying on it. See §3 Phase 25.
 - **2026-07-27** — **Phase 24 done — Products search now shows buy/sell price up front.** Searching by name renders a card grid above the table with Buy, Sell (discount-aware) and Stock per match, capped at 6, each card opening that product's Edit modal. Imported products with no price say "Price not set yet" instead of showing ৳0, and priced items show per-unit profit. Asked the client to choose between four readings first, since the table already had Buy/Sell columns. Frontend-only. See §3 Phase 24.
 - **2026-07-27** — **Phase 23 done — business-type renamed + user deletion in the Admin Panel.** "Mobile Shop Management" is now labelled **"Technology Management System"** (label only — the stored `type: 'mobile'` value and all mobile-module gating are unchanged; the Bangla translation key moved with the English string). New superadmin-only `DELETE /api/admin/businesses/:id` removes the owner login, all staff logins, the business and its data, wiping every collection whose schema has a `business` path (verified: 28 models covered, only `Business` excluded and deleted explicitly) — with guards against deleting a superadmin or the admin's own account. The popup requires typing the business name before the red Delete button arms, and points at Deactivate as the reversible option. See §3 Phase 23.

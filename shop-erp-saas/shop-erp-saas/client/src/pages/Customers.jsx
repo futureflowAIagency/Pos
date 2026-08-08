@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, History, HandCoins, Printer } from 'lucide-react';
+import { Plus, Trash2, History, HandCoins, Printer, Pencil, CalendarClock } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
@@ -7,16 +7,20 @@ import Modal from '../components/ui/Modal.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import DueReceipt from '../components/print/DueReceipt.jsx';
 import ThermalReceipt from '../components/print/ThermalReceipt.jsx';
-import { taka, fmtDateTime } from '../utils/format.js';
+import { taka, fmtDate, fmtDateTime } from '../utils/format.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useConfirm } from '../context/ConfirmContext.jsx';
+
+const emptyForm = { name: '', phone: '', email: '', address: '', nid: '', dueDate: '' };
+const toDateInput = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
 
 export default function Customers() {
   const { business } = useAuth();
   const confirm = useConfirm();
   const [customers, setCustomers] = useState([]);
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState({ name: '', phone: '', email: '', address: '', nid: '' });
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState(emptyForm);
   const [history, setHistory] = useState(null);
   const [dueModal, setDueModal] = useState(null);
   const [dueAmount, setDueAmount] = useState(0);
@@ -28,9 +32,22 @@ export default function Customers() {
   const load = async () => { const { data } = await api.get('/customers'); setCustomers(data.data.customers); };
   useEffect(() => { load(); }, []);
 
+  const openNew = () => { setEditId(null); setForm(emptyForm); setModal(true); };
+  const openEdit = (c) => {
+    setEditId(c._id);
+    setForm({ name: c.name || '', phone: c.phone || '', email: c.email || '', address: c.address || '', nid: c.nid || '', dueDate: toDateInput(c.dueDate) });
+    setModal(true);
+  };
+
   const save = async () => {
-    try { await api.post('/customers', form); toast.success('Added'); setModal(false); setForm({ name: '', phone: '', email: '', address: '', nid: '' }); load(); }
-    catch (e) { toast.error(e.response?.data?.message || 'Error'); }
+    if (!form.name.trim()) return toast.error('Name is required');
+    const payload = { ...form, dueDate: form.dueDate || null };
+    try {
+      if (editId) await api.put(`/customers/${editId}`, payload);
+      else await api.post('/customers', payload);
+      toast.success(editId ? 'Customer updated' : 'Added');
+      setModal(false); setForm(emptyForm); setEditId(null); load();
+    } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
   };
   const del = async (c) => {
     const ok = await confirm({
@@ -54,7 +71,7 @@ export default function Customers() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Customers</h1>
-        <button className="btn-primary" onClick={() => setModal(true)}><Plus size={18} /> Add Customer</button>
+        <button className="btn-primary" onClick={openNew}><Plus size={18} /> Add Customer</button>
       </div>
 
       <DataTable
@@ -62,7 +79,14 @@ export default function Customers() {
           { key: 'name', label: 'Name' },
           { key: 'phone', label: 'Phone' },
           { key: 'totalDue', label: 'Due', className: 'text-right', render: (r) => (
-            <span className={r.totalDue > 0 ? 'text-red-500 font-semibold' : ''}>{taka(r.totalDue)}</span>
+            <div>
+              <span className={r.totalDue > 0 ? 'text-red-500 font-semibold' : ''}>{taka(r.totalDue)}</span>
+              {r.totalDue > 0 && r.dueDate && (
+                <p className={`text-xs flex items-center justify-end gap-1 mt-0.5 ${new Date(r.dueDate) <= new Date() ? 'text-red-500' : 'text-slate-400'}`}>
+                  <CalendarClock size={11} /> {fmtDate(r.dueDate)}
+                </p>
+              )}
+            </div>
           )},
           { key: 'storeCredit', label: 'Store Credit', className: 'text-right', render: (r) => (
             r.storeCredit > 0 ? <span className="text-green-600 font-semibold">{taka(r.storeCredit)}</span> : <span className="text-slate-400">—</span>
@@ -71,6 +95,7 @@ export default function Customers() {
             <div className="flex justify-end gap-1">
               <button onClick={() => viewHistory(r)} className="btn-ghost p-1.5" title="History"><History size={15} /></button>
               <button onClick={() => setDueModal(r)} className="btn-ghost p-1.5 text-green-600" title="Collect due" disabled={r.totalDue <= 0}><HandCoins size={15} /></button>
+              <button onClick={() => openEdit(r)} className="btn-ghost p-1.5" title="Edit"><Pencil size={15} /></button>
               <button onClick={() => del(r)} className="btn-ghost p-1.5 text-red-500"><Trash2 size={15} /></button>
             </div>
           )},
@@ -78,8 +103,8 @@ export default function Customers() {
         rows={customers}
       />
 
-      {/* Add */}
-      <Modal open={modal} onClose={() => setModal(false)} title="Add Customer"
+      {/* Add / Edit */}
+      <Modal open={modal} onClose={() => setModal(false)} title={editId ? 'Edit Customer' : 'Add Customer'}
         footer={<><button className="btn-ghost" onClick={() => setModal(false)}>Cancel</button><button className="btn-primary" onClick={save}>Save</button></>}>
         <div className="space-y-3">
           <div><label className="label">Name</label><input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
@@ -87,6 +112,10 @@ export default function Customers() {
           <div><label className="label">Email <span className="text-xs text-slate-400">(for email campaigns)</span></label><input className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="customer@example.com" /></div>
           <div><label className="label">NID / Identity</label><input className="input" value={form.nid} onChange={(e) => setForm({ ...form, nid: e.target.value })} placeholder="National ID (optional)" /></div>
           <div><label className="label">Address</label><input className="input" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></div>
+          <div>
+            <label className="label">Due Date <span className="text-xs text-slate-400">(reminder — a notification appears once this date arrives, while due &gt; 0)</span></label>
+            <input className="input" type="date" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} />
+          </div>
         </div>
       </Modal>
 

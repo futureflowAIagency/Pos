@@ -1,7 +1,8 @@
-import { Moon, Sun, Menu, LogOut, Bell, Languages, Store } from 'lucide-react';
+import { Moon, Sun, Menu, LogOut, Languages, Store } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useLang } from '../../context/LanguageContext.jsx';
+import NotificationBell from './NotificationBell.jsx';
 
 export default function Topbar({ onMenu }) {
   const { theme, toggleTheme } = useTheme();
@@ -29,7 +30,7 @@ export default function Topbar({ onMenu }) {
             </select>
           </div>
         )}
-        <button className="btn-ghost p-2 relative" title={t('Notifications')}><Bell size={18} /></button>
+        <NotificationBell />
         <button onClick={toggleLang} className="btn-ghost p-2 flex items-center gap-1" title={t('Toggle language')}>
           <Languages size={18} />
           <span className="text-xs font-semibold">{lang === 'en' ? 'বাং' : 'EN'}</span>

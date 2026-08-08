@@ -74,6 +74,7 @@ export const collectDue = asyncHandler(async (req, res) => {
   }
 
   customer.totalDue = Math.max(0, customer.totalDue - pay);
+  if (customer.totalDue === 0) customer.dueDate = null; // fully settled — no reminder needed anymore
   await customer.save();
 
   const duePayment = await DuePayment.create({

@@ -271,7 +271,8 @@ export const collectSaleDue = asyncHandler(async (req, res) => {
 
   if (sale.customer) {
     await Customer.updateOne(tenantFilter(req, { _id: sale.customer }), { $inc: { totalDue: -pay } });
-    await Customer.updateOne(tenantFilter(req, { _id: sale.customer, totalDue: { $lt: 0 } }), { $set: { totalDue: 0 } });
+    // fully settled — clamp to 0 and drop any due-date reminder, it's no longer relevant
+    await Customer.updateOne(tenantFilter(req, { _id: sale.customer, totalDue: { $lte: 0 } }), { $set: { totalDue: 0, dueDate: null } });
   }
 
   const duePayment = await DuePayment.create({
