@@ -20,7 +20,7 @@ const bn = {
   'EMI / Installments': 'ইএমআই / কিস্তি', 'Service / Repair': 'সার্ভিস / মেরামত',
   'Admin Panel': 'অ্যাডমিন প্যানেল', Notifications: 'নোটিফিকেশন',
   'Toggle theme': 'থিম পরিবর্তন', 'Toggle language': 'ভাষা পরিবর্তন', Logout: 'লগ আউট',
-  Notifications: 'নোটিফিকেশন', 'Mark all as read': 'সব পঠিত হিসেবে চিহ্নিত করুন', 'No notifications': 'কোনো নোটিফিকেশন নেই',
+  'Mark all as read': 'সব পঠিত হিসেবে চিহ্নিত করুন', 'No notifications': 'কোনো নোটিফিকেশন নেই',
 
   // ---- Stat cards / summary ----
   'Month Revenue': 'মাসিক আয়', 'Net Profit': 'নিট লাভ', "Today's Sales": 'আজকের বিক্রয়',

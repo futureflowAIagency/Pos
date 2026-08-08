@@ -21,7 +21,6 @@ export default function NotificationBell() {
   const [items, setItems] = useState([]);
   const [unread, setUnread] = useState(0);
   const [loading, setLoading] = useState(false);
-  const ref = useRef(null);
 
   const load = async () => {
     setLoading(true);
