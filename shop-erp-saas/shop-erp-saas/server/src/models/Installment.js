@@ -28,7 +28,16 @@ const installmentSchema = new mongoose.Schema(
     imei2: { type: String, default: '' },
     serial: { type: String, default: '' },
     productName: { type: String, default: '' }, // free-text label of what was financed
-    totalAmount: { type: Number, required: true, default: 0 },
+    totalAmount: { type: Number, required: true, default: 0 }, // the EMI price the customer pays in full
+    // The product's normal shelf price when the plan was made. The EMI price is
+    // usually this plus a markup the shopkeeper adds for selling on credit, so
+    // keeping it makes that markup (totalAmount − basePrice) visible afterwards.
+    basePrice: { type: Number, default: 0 },
+    // What the financed item cost the shop — snapshotted from the product at plan
+    // creation (or typed in for a free-text item). This is what makes an EMI sale
+    // show real profit: the difference is recognised payment by payment, as the
+    // money actually arrives (see services/emiService.js).
+    purchasePrice: { type: Number, default: 0 },
     downPayment: { type: Number, default: 0 },
     downPaymentMethod: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' },
     months: { type: Number, default: 1 }, // number of instalments
@@ -60,6 +69,36 @@ const installmentSchema = new mongoose.Schema(
 installmentSchema.virtual('balance').get(function () {
   const paid = (this.schedule || []).filter((s) => s.paid).reduce((a, s) => a + s.amount, 0);
   return Math.max(0, (this.totalAmount || 0) - (this.downPayment || 0) - paid);
+});
+
+// What was charged on top of the normal price for selling on EMI.
+installmentSchema.virtual('emiMarkup').get(function () {
+  const base = this.basePrice || 0;
+  if (base <= 0) return 0;
+  return Math.round(((this.totalAmount || 0) - base) * 100) / 100;
+});
+
+// Money actually received so far (down payment + every paid instalment).
+installmentSchema.virtual('collected').get(function () {
+  const paid = (this.schedule || []).filter((s) => s.paid).reduce((a, s) => a + s.amount, 0);
+  return Math.round(((this.downPayment || 0) + paid) * 100) / 100;
+});
+
+// Whole-plan profit. 0 when no cost was recorded — never treat the full EMI
+// price as profit just because the purchase price is missing.
+installmentSchema.virtual('totalProfit').get(function () {
+  const total = this.totalAmount || 0;
+  const cost = this.purchasePrice || 0;
+  if (total <= 0 || cost <= 0) return 0;
+  return Math.round((total - cost) * 100) / 100;
+});
+
+// Profit already recognised = the same share of the profit as the share of the
+// plan that has been paid off.
+installmentSchema.virtual('profitEarned').get(function () {
+  const total = this.totalAmount || 0;
+  if (total <= 0 || !this.totalProfit) return 0;
+  return Math.round((this.collected / total) * this.totalProfit * 100) / 100;
 });
 installmentSchema.set('toJSON', { virtuals: true });
 

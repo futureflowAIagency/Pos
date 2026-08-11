@@ -21,6 +21,7 @@ const emptyMap = () => METHODS.reduce((m, k) => { m[k] = 0; return m; }, {});
 //           (by schedule.method) + funds added (by source) + transfers in (by toMethod)
 // Money OUT = expenses (by source) + supplier purchase/payment `paid` (by source)
 //           + return/exchange cash refunds (by refundMethod; store-credit is excluded — no cash moves)
+//           + "money back" hand-backs of an overpayment (by moneyBacks.method)
 //           + funds withdrawn (by source) + transfers out (by fromMethod)
 //
 // Each branch keeps its own till — pass `branchId` to scope to one branch (the
@@ -35,7 +36,7 @@ export async function computeBalances(businessId, branchId = null) {
   const [
     splitSalesIn, legacySalesIn, dueIn, serviceIn, emiDownIn, emiScheduleIn,
     fundsAddIn, fundsWithdrawOut, transfersIn, transfersOut,
-    expOut, supplierOut, refundOut,
+    expOut, supplierOut, refundOut, moneyBackOut,
   ] = await Promise.all([
     // Multi-tender sales: unwind the payments[] breakdown
     Sale.aggregate([
@@ -100,6 +101,13 @@ export async function computeBalances(businessId, branchId = null) {
       { $match: { business: bId, ...branchMatch } },
       { $group: { _id: { $ifNull: ['$refundMethod', 'cash'] }, amount: { $sum: '$cashRefund' } } },
     ]),
+    // "money back" hand-backs — an overpayment the shop took in and later gave
+    // back, so it leaves the till the same way it came in (money OUT)
+    Sale.aggregate([
+      { $match: { business: bId, ...branchMatch, 'moneyBacks.0': { $exists: true } } },
+      { $unwind: '$moneyBacks' },
+      { $group: { _id: { $ifNull: ['$moneyBacks.method', 'cash'] }, amount: { $sum: '$moneyBacks.amount' } } },
+    ]),
   ]);
 
   const inflow = emptyMap();
@@ -117,6 +125,7 @@ export async function computeBalances(businessId, branchId = null) {
   for (const r of expOut) if (r._id in outflow) outflow[r._id] += r.amount || 0;
   for (const r of supplierOut) if (r._id in outflow) outflow[r._id] += r.amount || 0;
   for (const r of refundOut) if (r._id in outflow) outflow[r._id] += r.amount || 0;
+  for (const r of moneyBackOut) if (r._id in outflow) outflow[r._id] += r.amount || 0;
 
   const balances = emptyMap();
   for (const m of METHODS) balances[m] = inflow[m] - outflow[m];

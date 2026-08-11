@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Pencil, Trash2, Search, AlertTriangle, Barcode, ScanLine, Tag, Printer } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, AlertTriangle, Barcode, ScanLine, Tag, Printer, PackagePlus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
@@ -53,6 +53,7 @@ export default function Products() {
   const [purchase, setPurchase] = useState(emptyPurchase);
   const [supplierList, setSupplierList] = useState([]);
   const [unitsFor, setUnitsFor] = useState(null); // product whose IMEIs are being managed
+  const [stockFor, setStockFor] = useState(null); // product whose quantity is being adjusted
   const [labelFor, setLabelFor] = useState(null); // product whose barcode labels are being printed
   const [scanCode, setScanCode] = useState('');
   const [saving, setSaving] = useState(false);
@@ -251,6 +252,12 @@ export default function Products() {
     )},
     { key: 'actions', label: '', className: 'text-right', render: (r) => (
       <div className="flex justify-end gap-2">
+        {/* Quantity-only stock-in — no need to open the full edit form and retype
+            the stock figure (serial-tracked items use the unit button instead,
+            their quantity is derived from the unit codes). */}
+        {!r.trackSerial && (
+          <button onClick={() => setStockFor(r)} className="btn-ghost p-1.5 text-brand-600" title="Add / adjust quantity"><PackagePlus size={15} /></button>
+        )}
         {serialEnabled && <button onClick={() => setLabelFor(r)} className="btn-ghost p-1.5" title="Print barcode label"><Tag size={15} /></button>}
         {serialEnabled && r.trackSerial && (
           <button onClick={() => setUnitsFor(r)} className="btn-ghost p-1.5" title={isMobile ? 'Manage IMEIs' : 'Manage unit codes'}><Barcode size={15} /></button>
@@ -466,6 +473,7 @@ export default function Products() {
         )}
       </Modal>
 
+      {stockFor && <StockAdjustModal product={stockFor} onClose={() => setStockFor(null)} onChanged={load} />}
       {unitsFor && <UnitsModal product={unitsFor} isMobile={isMobile} onClose={() => setUnitsFor(null)} onChanged={load} />}
       {labelFor && <LabelPrintModal product={labelFor} business={business} isMobile={isMobile} onClose={() => setLabelFor(null)} onChanged={load} />}
 
@@ -558,6 +566,84 @@ function ItemBlock({ item, index, onChange, onRemove, canRemove, isMobile, seria
         )}
       </div>
     </div>
+  );
+}
+
+// ---- Quick stock quantity change (non-serial products) ----
+// Restocking used to mean opening Edit Product and retyping the stock number,
+// which is easy to get wrong (type 5 over 50 and 45 units vanish). Here the
+// owner types only how many arrived; the new total is shown before saving.
+function StockAdjustModal({ product, onClose, onChanged }) {
+  const [mode, setMode] = useState('add'); // add | remove | set
+  const [qty, setQty] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const current = Number(product.stock) || 0;
+  const n = Number(qty) || 0;
+  const after = mode === 'set' ? n : mode === 'remove' ? current - n : current + n;
+  const invalid = !qty.toString().trim() || n < 0 || after < 0;
+
+  const submit = async () => {
+    if (invalid) return toast.error(after < 0 ? `Only ${current} in stock` : 'Enter a quantity');
+    setSaving(true);
+    try {
+      await api.patch(`/products/${product._id}/stock`, { qty: n, mode, note });
+      toast.success(`Stock updated — ${product.name} is now ${after} ${product.unit}`);
+      onChanged?.(); onClose();
+    } catch (e) { toast.error(e.response?.data?.message || 'Could not update stock'); }
+    setSaving(false);
+  };
+
+  const modes = [
+    { k: 'add', label: 'Add stock' },
+    { k: 'remove', label: 'Remove' },
+    { k: 'set', label: 'Set exact' },
+  ];
+
+  return (
+    <Modal open onClose={onClose} title={`Stock — ${product.name}`}
+      footer={<><button className="btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn-primary" disabled={saving || invalid} onClick={submit}>Save</button></>}>
+      <div className="space-y-3">
+        <p className="text-sm text-slate-500">Current stock: <strong className="text-slate-700 dark:text-slate-200">{current} {product.unit}</strong></p>
+
+        <div className="flex gap-2">
+          {modes.map((m) => (
+            <button key={m.k} type="button" onClick={() => setMode(m.k)}
+              className={`flex-1 text-sm py-2 rounded-lg border transition ${mode === m.k
+                ? 'bg-brand-600 text-white border-brand-600'
+                : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'}`}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        <div>
+          <label className="label">{mode === 'set' ? 'New total quantity' : 'Quantity'}</label>
+          <input className="input" type="number" min="0" autoFocus value={qty}
+            onChange={(e) => setQty(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !invalid) submit(); }}
+            placeholder={mode === 'add' ? 'How many arrived?' : mode === 'remove' ? 'How many to remove?' : 'Counted quantity'} />
+        </div>
+
+        <div className="flex gap-2">
+          {[1, 5, 10, 20, 50].map((v) => (
+            <button key={v} type="button" className="btn-ghost text-xs px-2 py-1"
+              onClick={() => setQty(String((Number(qty) || 0) + v))}>+{v}</button>
+          ))}
+        </div>
+
+        <div><label className="label">Note (optional)</label>
+          <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. new delivery, damaged, stock count" />
+        </div>
+
+        <div className={`rounded-lg p-3 text-sm ${after < 0 ? 'bg-red-50 text-red-600 dark:bg-red-900/20' : 'bg-slate-50 dark:bg-slate-800'}`}>
+          New stock: <strong>{Math.max(0, after)} {product.unit}</strong>
+          {after < 0 && <span className="ml-1">— more than the {current} in stock</span>}
+        </div>
+      </div>
+    </Modal>
   );
 }
 

@@ -14,6 +14,7 @@ import MarketingSettings from '../models/MarketingSettings.js';
 import { decryptSecret } from '../utils/secretCrypto.js';
 import { generateText, hasCentralAI } from '../services/aiService.js';
 import { computeBalances } from '../services/balanceService.js';
+import { recogniseEmiProfit, findPlansInRange } from '../services/emiService.js';
 
 // Resolve a { from, to } window from a named period or an explicit custom range.
 // period: daily | weekly | monthly | half_yearly | yearly | custom
@@ -49,7 +50,7 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
 
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 
-  const [salesAgg, todayAgg, expenseAgg, products, dueAgg, employeesCount, topProducts, recentOrders, paymentAgg, recentActivities, periodSalesAgg, periodExpenseAgg, balances, periodServiceAgg, activeEmis, recentSalesByProduct] = await Promise.all([
+  const [salesAgg, todayAgg, expenseAgg, products, dueAgg, employeesCount, topProducts, recentOrders, paymentAgg, recentActivities, periodSalesAgg, periodExpenseAgg, balances, periodServiceAgg, activeEmis, recentSalesByProduct, periodEmiPlans] = await Promise.all([
     Sale.aggregate([
       { $match: { business: bId, ...bMatch, createdAt: { $gte: startOfMonth } } },
       { $group: { _id: null, revenue: { $sum: '$total' }, profit: { $sum: '$profit' }, count: { $sum: 1 } } },
@@ -121,6 +122,9 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
       { $match: { 'items.product': { $ne: null } } },
       { $group: { _id: '$items.product', qtySold: { $sum: '$items.qty' }, lastSoldAt: { $max: '$createdAt' } } },
     ]),
+    // EMI plans that took money inside the period (down payment or an instalment)
+    // — their profit is recognised payment by payment, see services/emiService.js
+    findPlansInRange({ business: bId, ...bMatch }, range.from, range.to),
   ]);
 
   const monthRevenue = salesAgg[0]?.revenue || 0;
@@ -131,6 +135,10 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
   const periodRevenue = periodSalesAgg[0]?.revenue || 0;
   const periodProfit = periodSalesAgg[0]?.profit || 0;
   const periodExpense = periodExpenseAgg[0]?.total || 0;
+  // EMI profit for the same window — an EMI phone is a real sale, so its margin
+  // belongs in the shop's profit, but spread across the instalments as they are
+  // collected rather than all at once when the plan is signed.
+  const emi = recogniseEmiProfit(periodEmiPlans, range.from, range.to);
 
   // Slow-moving / dead stock: in-stock products (added >14 days ago, so genuinely
   // new arrivals aren't unfairly flagged) ranked by the least sold in the last 90
@@ -173,10 +181,18 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
       periodFrom: range.from,
       periodTo: range.to,
       periodRevenue,
-      periodProfit,
+      periodProfit,          // sales only
+      periodEmiProfit: emi.profit,
       periodExpense,
-      periodNetProfit: periodProfit - periodExpense,
+      periodNetProfit: Math.round((periodProfit + emi.profit - periodExpense) * 100) / 100,
       periodSalesCount: periodSalesAgg[0]?.count || 0,
+      // ---- EMI money recognised in this period ----
+      emi: {
+        profit: emi.profit,
+        collected: emi.collected,
+        payments: emi.payments,
+        plansWithoutCost: emi.plansWithoutCost, // plans that took money but have no purchase price set
+      },
       // ---- cumulative balances ----
       balances,
       cardCollection: balances.card,

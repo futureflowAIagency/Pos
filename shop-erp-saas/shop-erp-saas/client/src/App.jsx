@@ -7,6 +7,7 @@ import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Products from './pages/Products.jsx';
 import POS from './pages/POS.jsx';
+import InvoiceSearch from './pages/InvoiceSearch.jsx';
 import Customers from './pages/Customers.jsx';
 import Suppliers from './pages/Suppliers.jsx';
 import Branches from './pages/Branches.jsx';
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/products" element={<Products />} />
         <Route path="/pos" element={<POS />} />
+        <Route path="/invoice-search" element={<InvoiceSearch />} />
         <Route path="/customers" element={<Customers />} />
         <Route path="/suppliers" element={<Suppliers />} />
         <Route path="/branches" element={<Branches />} />

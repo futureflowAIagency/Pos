@@ -24,7 +24,13 @@ export default function AdvancedReport({ data, business }) {
           <tbody>
             <Row l="Total Sales" r={taka(totals.sales)} />
             <Row l="Total Purchase" r={taka(totals.purchase)} />
-            <Row l="Gross Profit" r={taka(totals.profit)} />
+            <Row l="Gross Profit (sales)" r={taka(totals.profit)} />
+            {totals.emiCollected > 0 && (
+              <>
+                <Row l="EMI Collected" r={taka(totals.emiCollected)} />
+                <Row l="EMI Profit (earned on payments received)" r={taka(totals.emiProfit || 0)} />
+              </>
+            )}
             <Row l="Total Expense" r={taka(totals.expense)} />
             <Row l="Net Profit" r={taka(totals.netProfit)} bold />
             <Row l="Number of Orders" r={totals.salesCount} />

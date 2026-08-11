@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Package, ShoppingCart, Users, UserCog,
   Wallet, CreditCard, Settings, ScrollText, ShieldCheck, X,
-  Truck, ShieldQuestion, CalendarClock, Wrench, Megaphone, Contact2, Undo2, FileSpreadsheet, Store, RefreshCw,
+  Truck, ShieldQuestion, CalendarClock, Wrench, Megaphone, Contact2, Undo2, FileSpreadsheet, Store, RefreshCw, ReceiptText,
 } from 'lucide-react';
 import api from '../../api/axios.js';
 import { fmtDateTime } from '../../utils/format.js';
@@ -44,6 +44,9 @@ const baseLinks = [
   { to: '/', key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/products', key: 'products', label: 'Products', icon: Package },
   { to: '/pos', key: 'pos', label: 'POS / Sales', icon: ShoppingCart },
+  // Same 'pos' permission: everything it can do (view, reprint, collect due,
+  // return) already lives behind that module on the server.
+  { to: '/invoice-search', key: 'pos', label: 'Invoice Search', icon: ReceiptText },
   { to: '/customers', key: 'customers', label: 'Customers', icon: Users },
   { to: '/suppliers', key: 'suppliers', label: 'Suppliers', icon: Truck },
   { to: '/employees', key: 'employees', label: 'Employees', icon: UserCog },

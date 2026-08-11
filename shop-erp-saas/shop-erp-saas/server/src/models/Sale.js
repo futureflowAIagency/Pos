@@ -32,6 +32,21 @@ const paymentLineSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// One "money back" hand-back of an overpayment on this invoice: a ৳500 bill
+// settled with ৳550 leaves ৳50 belonging to the customer, and this records giving
+// it back later. Not a return — no goods move, no stock or profit changes; it
+// only takes the money back out of the till it went into.
+const moneyBackSchema = new mongoose.Schema(
+  {
+    amount: { type: Number, default: 0 },
+    method: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' },
+    note: { type: String, default: '' },
+    date: { type: Date, default: Date.now },
+    by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  },
+  { _id: false }
+);
+
 const saleSchema = new mongoose.Schema(
   {
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
@@ -57,6 +72,11 @@ const saleSchema = new mongoose.Schema(
     // multi-tender breakdown of the paid portion, e.g. bKash 2000 + Card 1000 + Cash 3000.
     // Empty for older/legacy single-tender sales — those fall back to paid+paidVia.
     payments: { type: [paymentLineSchema], default: [] },
+    // ---- money back: overpayment still held for the customer ----
+    // Outstanding money back = paid − total − moneyBackReturned (always derived,
+    // never stored, so editing the invoice's amounts can't leave it stale).
+    moneyBackReturned: { type: Number, default: 0 },
+    moneyBacks: { type: [moneyBackSchema], default: [] },
     soldBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     // true once every line item has been fully returned (req 14)
     returned: { type: Boolean, default: false },

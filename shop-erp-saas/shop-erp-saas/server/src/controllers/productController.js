@@ -213,6 +213,40 @@ export const updateProduct = asyncHandler(async (req, res) => {
   ok(res, { product }, 'Product updated');
 });
 
+// @route PATCH /api/products/:id/stock  body: { qty, mode: 'add'|'remove'|'set', note }
+// Quantity-only stock movement, kept separate from the full Edit-Product form so
+// restocking never means retyping the stock figure by hand (a real mis-entry risk
+// for a general/pharmacy shop). `add` is the everyday case; `remove` covers
+// breakage/shrinkage and `set` a physical stock-count correction.
+export const adjustProductStock = asyncHandler(async (req, res) => {
+  const { qty, mode = 'add', note = '' } = req.body;
+  const n = Number(qty);
+  if (!Number.isFinite(n) || n < 0) throw new ApiError(400, 'Enter a valid quantity (0 or more)');
+
+  const product = await Product.findOne(branchFilter(req, { _id: req.params.id }));
+  if (!product) throw new ApiError(404, 'Product not found');
+  // Serial-tracked stock is DERIVED from in-stock PhoneUnit rows — a manual bump
+  // here would be silently overwritten by the next unit sync, so refuse it and
+  // point at the right tool instead.
+  if (product.trackSerial) {
+    throw new ApiError(400, `${product.name} is tracked by unique code — add its IMEI / unit codes instead, the quantity follows them automatically`);
+  }
+
+  const before = Number(product.stock) || 0;
+  const after = mode === 'set' ? n : mode === 'remove' ? before - n : before + n;
+  if (after < 0) throw new ApiError(400, `Cannot remove ${n} — only ${before} in stock`);
+  if (after === before) return ok(res, { product }, 'Stock unchanged');
+
+  product.stock = after;
+  await product.save();
+
+  await logActivity(req, {
+    action: 'ADJUST_STOCK', entity: 'Product', entityId: product._id,
+    meta: { name: product.name, mode, qty: n, before, after, note },
+  });
+  ok(res, { product }, 'Stock updated');
+});
+
 // @route DELETE /api/products/:id  (soft delete)
 export const deleteProduct = asyncHandler(async (req, res) => {
   const product = await Product.findOneAndUpdate(

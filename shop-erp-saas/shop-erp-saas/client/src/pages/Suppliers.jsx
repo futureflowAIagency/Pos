@@ -409,6 +409,7 @@ function SupplierProductsModal({ supplier, onClose }) {
                 <th className="px-3 py-2">Product</th>
                 <th className="px-3 py-2 text-right">Purchased</th>
                 <th className="px-3 py-2 text-right">Sold</th>
+                <th className="px-3 py-2 text-right">Returned</th>
                 <th className="px-3 py-2 text-right">Current Stock</th>
               </tr>
             </thead>
@@ -418,12 +419,13 @@ function SupplierProductsModal({ supplier, onClose }) {
                   <td className="px-3 py-2">{r.name}</td>
                   <td className="px-3 py-2 text-right">{r.purchasedQty}</td>
                   <td className="px-3 py-2 text-right">{r.soldQty}</td>
+                  <td className={`px-3 py-2 text-right ${r.returnedQty > 0 ? 'text-amber-600' : 'text-slate-400'}`}>{r.returnedQty || '—'}</td>
                   <td className="px-3 py-2 text-right font-semibold">{r.currentStock ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <p className="text-xs text-slate-400 p-3">Sold/Current Stock are shop-wide for each product (a sale doesn't record which supplier a specific unit came from).</p>
+          <p className="text-xs text-slate-400 p-3">Sold is net of returns — a returned item goes back into stock and stops counting as sold. Sold/Returned/Current Stock are shop-wide for each product (a sale doesn't record which supplier a specific unit came from).</p>
         </div>
       )}
     </Modal>

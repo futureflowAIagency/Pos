@@ -12,6 +12,18 @@ import PhoneUnit from '../models/PhoneUnit.js';
 import DuePayment from '../models/DuePayment.js';
 
 const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Looking an invoice UP is business-wide: a customer can walk into any branch
+// holding a receipt printed at another one, and the desk must be able to say
+// whether it's genuine and what was on it. Acting on an invoice (edit, collect
+// due, return) stays branch-scoped — that's real money moving through a specific
+// till. A branch-locked staff login never sees outside its own branch at all.
+const invoiceScope = (req, extra = {}) => {
+  const q = tenantFilter(req, extra);
+  if (req.user?.assignedBranch) q.branch = req.user.assignedBranch;
+  return q;
+};
 
 const genInvoiceNo = () =>
   'INV-' + Date.now().toString().slice(-8) + '-' + Math.floor(Math.random() * 90 + 10);
@@ -197,12 +209,33 @@ export const getSales = asyncHandler(async (req, res) => {
   ok(res, { sales, count: sales.length });
 });
 
+// @route GET /api/sales/search?q=  — Invoice Search: find an invoice by its
+// number (or the customer's name/phone, for when the slip is lost) and show
+// everything about it. Read-only lookup, so it spans the whole business.
+export const searchInvoices = asyncHandler(async (req, res) => {
+  const term = String(req.query.q || '').trim();
+  if (term.length < 2) throw new ApiError(400, 'Type at least 2 characters — invoice number, customer name or phone');
+  const rx = { $regex: escapeRegex(term), $options: 'i' };
+
+  const customerIds = await Customer.find(tenantFilter(req, { phone: rx })).distinct('_id');
+  const q = invoiceScope(req, {
+    $or: [
+      { invoiceNo: rx },
+      { customerName: rx },
+      ...(customerIds.length ? [{ customer: { $in: customerIds } }] : []),
+    ],
+  });
+
+  const sales = await Sale.find(q).sort('-createdAt').limit(30).populate('branch', 'name');
+  ok(res, { sales, count: sales.length });
+});
+
 // @route GET /api/sales/:id  — full invoice + its due-payment history
 export const getSale = asyncHandler(async (req, res) => {
-  const sale = await Sale.findOne(branchFilter(req, { _id: req.params.id }));
+  const sale = await Sale.findOne(invoiceScope(req, { _id: req.params.id })).populate('branch', 'name');
   if (!sale) throw new ApiError(404, 'Sale not found');
-  const duePayments = await DuePayment.find(branchFilter(req, { sale: sale._id })).sort('date');
-  ok(res, { sale, duePayments });
+  const duePayments = await DuePayment.find(tenantFilter(req, { sale: sale._id })).sort('date');
+  ok(res, { sale, duePayments, moneyBack: moneyBackOf(sale) });
 });
 
 // @route PATCH /api/sales/:id  — edit an invoice's money fields + customer name.
@@ -281,6 +314,40 @@ export const collectSaleDue = asyncHandler(async (req, res) => {
   });
   await logActivity(req, { action: 'COLLECT_DUE', entity: 'Sale', entityId: sale._id, meta: { amount: pay, method: m } });
   ok(res, { sale, duePayment }, 'Due collected');
+});
+
+// Money the customer handed over above the bill and hasn't had back yet.
+export const moneyBackOf = (sale) =>
+  Math.max(0, Math.round(((sale.paid || 0) - (sale.total || 0) - (sale.moneyBackReturned || 0)) * 100) / 100);
+
+// @route POST /api/sales/:id/money-back  — hand back an overpayment.
+// body: { amount, method, note }
+// A ৳500 bill paid with ৳550 records paid=550 (the shop really did take 550), so
+// the ৳50 sits on the invoice until the customer comes back for it. Returning it
+// is NOT a Return/Exchange: no goods move, so stock, profit and the invoice total
+// are all left exactly as they are — only the till gives the money back.
+export const payMoneyBack = asyncHandler(async (req, res) => {
+  const { amount, method = 'cash', note = '' } = req.body;
+  const amt = Number(amount);
+  if (!Number.isFinite(amt) || amt <= 0) throw new ApiError(400, 'Enter a valid amount');
+  const m = TENDERS.includes(method) ? method : 'cash';
+
+  const sale = await Sale.findOne(branchFilter(req, { _id: req.params.id }));
+  if (!sale) throw new ApiError(404, 'Sale not found');
+
+  const owed = moneyBackOf(sale);
+  if (owed <= 0) throw new ApiError(400, 'This invoice has no money to give back');
+  if (amt > owed + 0.001) throw new ApiError(400, `Only ${owed} was taken above the bill on this invoice`);
+
+  sale.moneyBacks.push({ amount: amt, method: m, note, date: new Date(), by: req.user._id });
+  sale.moneyBackReturned = Math.round(((sale.moneyBackReturned || 0) + amt) * 100) / 100;
+  await sale.save();
+
+  await logActivity(req, {
+    action: 'MONEY_BACK', entity: 'Sale', entityId: sale._id,
+    meta: { invoiceNo: sale.invoiceNo, amount: amt, method: m },
+  });
+  ok(res, { sale, moneyBackRemaining: moneyBackOf(sale) }, 'Money given back');
 });
 
 // @route GET /api/sales/report?period=daily|monthly

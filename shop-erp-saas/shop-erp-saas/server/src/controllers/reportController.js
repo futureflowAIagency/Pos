@@ -8,6 +8,7 @@ import Product from '../models/Product.js';
 import Customer from '../models/Customer.js';
 import Supplier from '../models/Supplier.js';
 import { computeBalances } from '../services/balanceService.js';
+import { recogniseEmiProfit, findPlansInRange } from '../services/emiService.js';
 
 // @route GET /api/reports/advanced?from=&to=
 // A single comprehensive, date-ranged report (req 8): sales/purchase/profit/expense
@@ -24,7 +25,7 @@ export const advancedReport = asyncHandler(async (req, res) => {
   const from = req.query.from ? new Date(req.query.from) : new Date(now.getFullYear(), now.getMonth(), 1);
   const to = req.query.to ? new Date(req.query.to + 'T23:59:59') : now;
 
-  const [salesAgg, purchaseAgg, expenseAgg, productWise, products, customerDueAgg, suppliers, balances] = await Promise.all([
+  const [salesAgg, purchaseAgg, expenseAgg, productWise, products, customerDueAgg, suppliers, balances, emiPlans] = await Promise.all([
     Sale.aggregate([
       { $match: { business: bId, ...bMatch, createdAt: { $gte: from, $lte: to } } },
       { $group: { _id: null, total: { $sum: '$total' }, profit: { $sum: '$profit' }, count: { $sum: 1 } } },
@@ -58,6 +59,8 @@ export const advancedReport = asyncHandler(async (req, res) => {
     Supplier.find({ business: bId, isActive: true }).select('totalPurchase totalPaid'),
     // cumulative per-method balances (money on hand right now)
     computeBalances(req.businessId, allBranches ? null : req.branchId),
+    // EMI plans that collected money in this range — profit recognised per payment
+    findPlansInRange({ business: bId, ...bMatch }, from, to),
   ]);
 
   const supplierDue = suppliers.reduce((s, x) => s + Math.max(0, (x.totalPurchase || 0) - (x.totalPaid || 0)), 0);
@@ -80,15 +83,18 @@ export const advancedReport = asyncHandler(async (req, res) => {
   const totalProfit = salesAgg[0]?.profit || 0;
   const totalPurchase = purchaseAgg[0]?.total || 0;
   const totalExpense = expenseAgg[0]?.total || 0;
+  const emi = recogniseEmiProfit(emiPlans, from, to);
 
   ok(res, {
     range: { from, to },
     totals: {
       sales: totalSales,
       purchase: totalPurchase,
-      profit: totalProfit,
+      profit: totalProfit,          // sales only
+      emiProfit: emi.profit,        // recognised as instalments were collected
+      emiCollected: emi.collected,
       expense: totalExpense,
-      netProfit: totalProfit - totalExpense,
+      netProfit: Math.round((totalProfit + emi.profit - totalExpense) * 100) / 100,
       salesCount: salesAgg[0]?.count || 0,
     },
     balances,

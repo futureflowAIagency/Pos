@@ -50,6 +50,7 @@ export default function Dashboard() {
   const s = data.summary;
   const bal = s.balances || {};
   const svc = s.service || {};
+  const emi = s.emi || {};
   const periodLabels = { daily: 'Today', weekly: 'This Week', monthly: 'This Month', half_yearly: 'Last 6 Months', yearly: 'This Year', custom: 'Custom Range' };
 
   const genAiSummary = async () => {
@@ -90,7 +91,11 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
           <StatCard icon={DollarSign} label="Total Income" value={taka(s.periodRevenue ?? s.monthRevenue)} sub={`${s.periodSalesCount ?? s.monthSalesCount} orders`} accent="brand" />
           <StatCard icon={TrendingDown} label="Total Expense" value={taka(s.periodExpense ?? s.monthExpense)} accent="red" />
-          <StatCard icon={TrendingUp} label="Total Profit" value={taka(s.periodNetProfit ?? s.netProfit)} accent={(s.periodNetProfit ?? s.netProfit) >= 0 ? 'green' : 'red'} />
+          {/* Total Profit now includes EMI margin earned on instalments collected
+              in this period — the sub-line says how much of it came from EMI. */}
+          <StatCard icon={TrendingUp} label="Total Profit" value={taka(s.periodNetProfit ?? s.netProfit)}
+            sub={s.periodEmiProfit > 0 ? `incl. ${taka(s.periodEmiProfit)} from EMI` : undefined}
+            accent={(s.periodNetProfit ?? s.netProfit) >= 0 ? 'green' : 'red'} />
           <StatCard icon={AlertTriangle} label="Total Due" value={taka(s.totalDue)} accent="red" />
           <StatCard icon={CalendarClock} label="EMI Receivable" value={taka(s.emiReceivable || 0)} sub={`${s.activeEmiCount || 0} active plan(s)`} accent="amber" />
         </div>
@@ -108,6 +113,24 @@ export default function Dashboard() {
           <StatCard icon={CreditCard} label="Card Collection" value={taka(bal.card || 0)} accent="brand" />
         </div>
       </div>
+
+      {/* EMI / Installments — money and profit recognised in this period.
+          Profit arrives with each instalment, not all at once at plan creation. */}
+      {(emi.collected > 0 || emi.plansWithoutCost > 0) && (
+        <div>
+          <p className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-2">EMI / Installments · {periodLabels[period]}</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            <StatCard icon={CalendarClock} label="EMI Collected" value={taka(emi.collected)} sub={`${emi.payments || 0} payment(s)`} accent="brand" />
+            <StatCard icon={TrendingUp} label="EMI Profit Earned" value={taka(emi.profit)} accent={emi.profit >= 0 ? 'green' : 'red'} />
+            <StatCard icon={CalendarClock} label="EMI Receivable" value={taka(s.emiReceivable || 0)} sub={`${s.activeEmiCount || 0} active plan(s)`} accent="amber" />
+          </div>
+          {emi.plansWithoutCost > 0 && (
+            <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
+              <AlertTriangle size={13} /> {emi.plansWithoutCost} EMI plan(s) took payments but have no item cost recorded, so no profit could be counted for them. Set the item's purchase price when creating the plan.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Service & Repair — internal profit breakdown, respects the date filter */}
       {svc.count > 0 && (

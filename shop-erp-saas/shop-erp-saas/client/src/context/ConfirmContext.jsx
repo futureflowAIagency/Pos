@@ -40,9 +40,11 @@ export function ConfirmProvider({ children }) {
   return (
     <ConfirmContext.Provider value={confirm}>
       {children}
+      {/* Backdrop clicks are ignored on purpose — same rule as Modal.jsx: a
+          dialog only closes through an explicit ✕ / Cancel / confirm click. */}
       {state && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50" onClick={() => close(false)}>
-          <div className="card w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50">
+          <div className="card w-full max-w-md">
             <div className="flex items-start gap-4 p-5">
               <div className={`shrink-0 w-11 h-11 rounded-full flex items-center justify-center ${t.ring}`}>
                 <Icon size={22} />

@@ -182,21 +182,32 @@ export const supplierProductBreakdown = asyncHandler(async (req, res) => {
   const productIds = purchased.map((p) => p._id);
   const [products, soldAgg] = await Promise.all([
     Product.find(tenantFilter(req, { _id: { $in: productIds } })),
+    // Sold qty is NET of returns: a returned item goes back on the shelf (the
+    // return already restocks Product.stock), so it must stop counting as sold
+    // here too — otherwise "bought 5, sold 3, 1 returned" keeps reading 3 sold
+    // while the shelf says 3 in stock. `items.qty` is never reduced by a return;
+    // `items.returnedQty` is what carries the reversal (see returnController).
     Sale.aggregate([
       { $match: { business: bId } },
       { $unwind: '$items' },
       { $match: { 'items.product': { $in: productIds } } },
-      { $group: { _id: '$items.product', soldQty: { $sum: '$items.qty' } } },
+      { $group: {
+        _id: '$items.product',
+        soldQty: { $sum: { $subtract: ['$items.qty', { $ifNull: ['$items.returnedQty', 0] }] } },
+        returnedQty: { $sum: { $ifNull: ['$items.returnedQty', 0] } },
+      } },
     ]),
   ]);
-  const soldMap = Object.fromEntries(soldAgg.map((s) => [String(s._id), s.soldQty]));
+  const soldMap = Object.fromEntries(soldAgg.map((s) => [String(s._id), s]));
   const prodMap = Object.fromEntries(products.map((p) => [String(p._id), p]));
 
   const rows = purchased.map((p) => ({
     productId: p._id,
     name: prodMap[String(p._id)]?.name || p.name,
     purchasedQty: p.purchasedQty,
-    soldQty: soldMap[String(p._id)] || 0, // shop-wide sold qty for this product, not exclusively from this supplier's batch
+    // shop-wide qty for this product, not exclusively from this supplier's batch
+    soldQty: Math.max(0, soldMap[String(p._id)]?.soldQty || 0),
+    returnedQty: soldMap[String(p._id)]?.returnedQty || 0,
     currentStock: prodMap[String(p._id)]?.stock ?? null,
   }));
 
