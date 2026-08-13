@@ -1,3 +1,12 @@
+// Bytes -> human-readable size, e.g. 2.34 MB. Used for the admin storage-usage view.
+export const formatBytes = (bytes = 0) => {
+  if (!bytes) return '0 MB';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let n = bytes, i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
+};
+
 export const taka = (n = 0) =>
   '৳' + Number(n || 0).toLocaleString('en-BD', { maximumFractionDigits: 2 });
 

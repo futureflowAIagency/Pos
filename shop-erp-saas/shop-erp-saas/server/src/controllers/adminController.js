@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { calculateObjectSize } from 'bson';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok } from '../utils/apiResponse.js';
@@ -147,6 +148,52 @@ export const getBusinessRecords = asyncHandler(async (req, res) => {
 
   const [records, total] = await Promise.all([query.lean(), Model.countDocuments(filter)]);
   ok(res, { records, total, page, limit, model });
+});
+
+// @route GET /api/admin/storage
+// Exact per-shop data-size accounting, in bytes — MongoDB does not track this
+// per tenant natively (collection stats are collection-wide, not filterable by
+// business), so it's computed on demand: the real BSON size of every document
+// each business owns, summed across every business-scoped model (same
+// discovery rule deleteBusiness uses to know what to wipe). One aggregation per
+// collection groups by business in a single pass, so cost scales with the
+// number of collections, not businesses × collections — but it still walks
+// every document in the database, so this is meant to be called explicitly
+// (a button), not loaded automatically on every page view.
+export const getStorageUsage = asyncHandler(async (req, res) => {
+  const businesses = await Business.find().select('_id name').lean();
+  const totals = new Map(businesses.map((b) => [String(b._id), 0]));
+
+  for (const name of mongoose.modelNames()) {
+    if (name === 'Business') continue;
+    const Model = mongoose.model(name);
+    if (!Model.schema.path('business')) continue;
+
+    let rows;
+    try {
+      // $bsonSize needs MongoDB 4.4+; exact and fast (server-side, no data transfer)
+      rows = await Model.aggregate([
+        { $group: { _id: '$business', bytes: { $sum: { $bsonSize: '$$ROOT' } } } },
+      ]);
+    } catch {
+      // fallback for older MongoDB: pull docs and size them in JS (slower)
+      const perBusiness = new Map();
+      const cursor = Model.find().lean().cursor();
+      for await (const doc of cursor) {
+        const key = String(doc.business);
+        perBusiness.set(key, (perBusiness.get(key) || 0) + calculateObjectSize(doc));
+      }
+      rows = [...perBusiness].map(([_id, bytes]) => ({ _id, bytes }));
+    }
+
+    for (const row of rows) {
+      const key = String(row._id);
+      if (totals.has(key)) totals.set(key, totals.get(key) + row.bytes);
+    }
+  }
+
+  const usage = businesses.map((b) => ({ business: b._id, name: b.name, bytes: totals.get(String(b._id)) || 0 }));
+  ok(res, { usage, computedAt: new Date() });
 });
 
 // @route POST /api/admin/owners  (Super Admin creates an Owner + their shop)

@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Building2, Users, Clock, BadgeCheck, Check, X, UserPlus, KeyRound, Copy, Trash2, AlertTriangle, Store, Database } from 'lucide-react';
+import { Building2, Users, Clock, BadgeCheck, Check, X, UserPlus, KeyRound, Copy, Trash2, AlertTriangle, Store, Database, HardDrive } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api/axios.js';
 import StatCard from '../../components/ui/StatCard.jsx';
 import DataTable from '../../components/ui/DataTable.jsx';
 import Modal from '../../components/ui/Modal.jsx';
 import Spinner from '../../components/ui/Spinner.jsx';
-import { taka, fmtDate, fmtDateTime } from '../../utils/format.js';
+import { taka, fmtDate, fmtDateTime, formatBytes } from '../../utils/format.js';
 import { useConfirm } from '../../context/ConfirmContext.jsx';
 
 const PLAN_LABELS = { monthly: 'Monthly', half_yearly: 'Half-Yearly', yearly: 'Yearly', custom: 'Custom' };
@@ -33,6 +33,10 @@ export default function AdminPanel() {
   const [deleteBiz, setDeleteBiz] = useState(null);
   const [deleteText, setDeleteText] = useState('');
   const [deleting, setDeleting] = useState(false);
+  // per-shop MongoDB storage usage (bytes) — computed on demand, not on every
+  // page load, since it walks every document in the database
+  const [storage, setStorage] = useState(null); // { byBusiness: {id: bytes}, computedAt }
+  const [loadingStorage, setLoadingStorage] = useState(false);
 
   const load = async () => {
     const [o, p, b] = await Promise.all([
@@ -45,6 +49,20 @@ export default function AdminPanel() {
     setBusinesses(b.data.data.businesses);
   };
   useEffect(() => { load(); }, []);
+
+  // Exact per-shop data usage — real BSON size summed across every collection
+  // that shop owns. Deliberately not auto-run: it walks the whole database, so
+  // it's a button, not something fired on every Businesses tab open.
+  const calculateStorage = async () => {
+    setLoadingStorage(true);
+    try {
+      const { data } = await api.get('/admin/storage');
+      const byBusiness = {};
+      for (const row of data.data.usage) byBusiness[row.business] = row.bytes;
+      setStorage({ byBusiness, computedAt: data.data.computedAt });
+    } catch (e) { toast.error(e.response?.data?.message || 'Failed to calculate storage'); }
+    setLoadingStorage(false);
+  };
 
   const review = async (r, action) => {
     const ok = await confirm({
@@ -203,7 +221,14 @@ export default function AdminPanel() {
           />
         </div>
       ) : (
-        <div className="card p-4">
+        <div className="card p-4 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <button className="btn-ghost text-xs" disabled={loadingStorage} onClick={calculateStorage}>
+              <HardDrive size={14} className="inline mr-1" />
+              {loadingStorage ? 'Calculating...' : storage ? 'Recalculate Storage Usage' : 'Calculate Storage Usage'}
+            </button>
+            {storage && <span className="text-xs text-slate-400">as of {fmtDateTime(storage.computedAt)}</span>}
+          </div>
           <DataTable
             columns={[
               { key: 'name', label: 'Business' },
@@ -221,6 +246,11 @@ export default function AdminPanel() {
                 r.hasExtraBranches
                   ? <span className="badge bg-brand-100 text-brand-700" title={(r.branches || []).map((b) => b.name).join(', ')}>{r.branchCount} branches</span>
                   : <span className="text-slate-400 text-xs">Main only</span>
+              )},
+              { key: 'storage', label: 'Data Used', className: 'text-right', render: (r) => (
+                storage
+                  ? <span title={`${(storage.byBusiness[r._id] || 0).toLocaleString()} bytes`}>{formatBytes(storage.byBusiness[r._id] || 0)}</span>
+                  : <span className="text-slate-400 text-xs">—</span>
               )},
               { key: 'price', label: 'Price', render: (r) => (
                 r.customPlan?.enabled

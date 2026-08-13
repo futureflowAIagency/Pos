@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { adminOverview, listPayments, reviewPayment, listBusinesses, toggleBusinessOwner, createOwner, setBusinessPlan, resetOwnerPassword, deleteBusiness, getBusinessSummary, getBusinessRecords } from '../controllers/adminController.js';
+import { adminOverview, listPayments, reviewPayment, listBusinesses, toggleBusinessOwner, createOwner, setBusinessPlan, resetOwnerPassword, deleteBusiness, getBusinessSummary, getBusinessRecords, getStorageUsage } from '../controllers/adminController.js';
 import { protect } from '../middleware/auth.js';
 import { superadminOnly } from '../middleware/role.js';
 
@@ -9,6 +9,7 @@ router.get('/overview', adminOverview);
 router.get('/payments', listPayments);
 router.patch('/payments/:id', reviewPayment);
 router.get('/businesses', listBusinesses);
+router.get('/storage', getStorageUsage);
 router.get('/businesses/:id/summary', getBusinessSummary);
 router.get('/businesses/:id/records', getBusinessRecords);
 router.post('/owners', createOwner);
