@@ -102,6 +102,53 @@ export const listBusinesses = asyncHandler(async (req, res) => {
   ok(res, { businesses: withBranches });
 });
 
+// @route GET /api/admin/businesses/:id/summary
+// Per-collection record counts for one shop, so the superadmin can see everything
+// that business owns without opening MongoDB directly. Driven off the model
+// registry (any schema with a `business` path) — same discovery rule deleteBusiness
+// uses to know what to wipe — so a model added later shows up here automatically.
+export const getBusinessSummary = asyncHandler(async (req, res) => {
+  const business = await Business.findById(req.params.id).populate('owner', 'name email phone isActive');
+  if (!business) throw new ApiError(404, 'Business not found');
+
+  const counts = {};
+  for (const name of mongoose.modelNames()) {
+    if (name === 'Business') continue;
+    const Model = mongoose.model(name);
+    if (!Model.schema.path('business')) continue;
+    const count = await Model.countDocuments({ business: business._id });
+    if (count) counts[name] = count;
+  }
+  ok(res, { business, counts });
+});
+
+// Collections whose ref fields are worth resolving to a readable name when browsing
+// — kept small and generic on purpose rather than one-off per model.
+const REF_POPULATE_FIELDS = ['branch', 'customer', 'supplier', 'product', 'soldBy', 'createdBy', 'user'];
+
+// @route GET /api/admin/businesses/:id/records?model=Product&page=1&limit=50
+// Paginated, read-only browse of one shop's data in a single collection — the
+// "click a shop, see its data" view. Any model with a `business` path is fair
+// game (same set deleteBusiness would wipe); anything else is rejected.
+export const getBusinessRecords = asyncHandler(async (req, res) => {
+  const { model } = req.query;
+  if (!model || !mongoose.modelNames().includes(model)) throw new ApiError(400, 'Unknown collection');
+  const Model = mongoose.model(model);
+  if (model === 'Business' || !Model.schema.path('business')) throw new ApiError(400, 'Not a shop-scoped collection');
+
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+  const filter = { business: req.params.id };
+
+  let query = Model.find(filter).sort('-createdAt').skip((page - 1) * limit).limit(limit);
+  for (const field of REF_POPULATE_FIELDS) {
+    if (Model.schema.path(field)) query = query.populate(field, 'name');
+  }
+
+  const [records, total] = await Promise.all([query.lean(), Model.countDocuments(filter)]);
+  ok(res, { records, total, page, limit, model });
+});
+
 // @route POST /api/admin/owners  (Super Admin creates an Owner + their shop)
 export const createOwner = asyncHandler(async (req, res) => {
   const { user, business } = await createOwnerWithBusiness(req.body);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Building2, Users, Clock, BadgeCheck, Check, X, UserPlus, KeyRound, Copy, Trash2, AlertTriangle, Store } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Building2, Users, Clock, BadgeCheck, Check, X, UserPlus, KeyRound, Copy, Trash2, AlertTriangle, Store, Database } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api/axios.js';
 import StatCard from '../../components/ui/StatCard.jsx';
@@ -228,6 +229,7 @@ export default function AdminPanel() {
               )},
               { key: 'actions', label: '', className: 'text-right', render: (r) => (
                 <div className="flex justify-end gap-1">
+                  <Link to={`/admin/businesses/${r._id}`} className="btn-ghost text-xs" title="Browse this shop's data"><Database size={13} className="inline mr-1" />View Data</Link>
                   <button onClick={() => openPlan(r)} className="btn-ghost text-xs">Set Price</button>
                   <button onClick={() => toggleOwner(r)} className="btn-ghost text-xs">{r.owner?.isActive !== false ? 'Deactivate' : 'Activate'}</button>
                   <button onClick={() => resetPassword(r)} disabled={resetting} className="btn-ghost text-xs" title="Issue a new temporary password"><KeyRound size={13} className="inline mr-1" />Reset Password</button>

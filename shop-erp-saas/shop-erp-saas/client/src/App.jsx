@@ -24,6 +24,7 @@ import Services from './pages/Services.jsx';
 import Marketing from './pages/Marketing.jsx';
 import CRM from './pages/CRM.jsx';
 import AdminPanel from './pages/admin/AdminPanel.jsx';
+import BusinessData from './pages/admin/BusinessData.jsx';
 
 export default function App() {
   return (
@@ -55,6 +56,7 @@ export default function App() {
 
       <Route element={<AdminRoute><Layout /></AdminRoute>}>
         <Route path="/admin" element={<AdminPanel />} />
+        <Route path="/admin/businesses/:id" element={<BusinessData />} />
       </Route>
     </Routes>
   );
