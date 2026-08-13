@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Building2, Users, Clock, BadgeCheck, Check, X, UserPlus, KeyRound, Copy, Trash2, AlertTriangle } from 'lucide-react';
+import { Building2, Users, Clock, BadgeCheck, Check, X, UserPlus, KeyRound, Copy, Trash2, AlertTriangle, Store } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api/axios.js';
 import StatCard from '../../components/ui/StatCard.jsx';
@@ -166,11 +166,12 @@ export default function AdminPanel() {
         <button className="btn-primary" onClick={() => { setOwnerForm(emptyOwner); setOwnerModal(true); }}><UserPlus size={18} /> Create Owner</button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
         <StatCard icon={Building2} label="Businesses" value={overview.businesses} accent="brand" />
         <StatCard icon={Users} label="Owners" value={overview.owners} accent="green" />
         <StatCard icon={Clock} label="Pending Payments" value={overview.pendingPayments} accent="amber" />
         <StatCard icon={BadgeCheck} label="Active Subscriptions" value={overview.activeSubs} accent="green" />
+        <StatCard icon={Store} label="Shops With Branches" value={overview.shopsWithBranches} accent="brand" />
       </div>
 
       <div className="flex gap-2 border-b border-slate-200 dark:border-slate-700">
@@ -215,6 +216,11 @@ export default function AdminPanel() {
                 <span className={`badge ${r.subscriptionStatus === 'active' ? 'bg-green-100 text-green-700' : r.subscriptionStatus === 'expired' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{r.subscriptionStatus}</span>
               )},
               { key: 'subscriptionExpiry', label: 'Expiry', render: (r) => fmtDate(r.subscriptionExpiry) },
+              { key: 'branches', label: 'Branches', render: (r) => (
+                r.hasExtraBranches
+                  ? <span className="badge bg-brand-100 text-brand-700" title={(r.branches || []).map((b) => b.name).join(', ')}>{r.branchCount} branches</span>
+                  : <span className="text-slate-400 text-xs">Main only</span>
+              )},
               { key: 'price', label: 'Price', render: (r) => (
                 r.customPlan?.enabled
                   ? <span title={`${r.customPlan.label} • ${r.customPlan.days} days`}>{taka(r.customPlan.price)} <span className="text-slate-400">/ {r.customPlan.days}d</span></span>

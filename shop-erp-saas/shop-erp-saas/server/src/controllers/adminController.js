@@ -5,18 +5,22 @@ import { ok } from '../utils/apiResponse.js';
 import Payment from '../models/Payment.js';
 import Subscription, { PLANS } from '../models/Subscription.js';
 import Business from '../models/Business.js';
+import Branch from '../models/Branch.js';
 import User from '../models/User.js';
 import { createOwnerWithBusiness, publicUser } from './authController.js';
 
 // @route GET /api/admin/overview
 export const adminOverview = asyncHandler(async (req, res) => {
-  const [businesses, owners, pendingPayments, activeSubs] = await Promise.all([
+  const [businesses, owners, pendingPayments, activeSubs, branchCounts] = await Promise.all([
     Business.countDocuments(),
     User.countDocuments({ role: 'owner' }),
     Payment.countDocuments({ status: 'pending' }),
     Business.countDocuments({ subscriptionStatus: 'active' }),
+    Branch.aggregate([{ $group: { _id: '$business', count: { $sum: 1 } } }]),
   ]);
-  ok(res, { overview: { businesses, owners, pendingPayments, activeSubs } });
+  // "added branches" = has more than the one auto-created Main Branch
+  const shopsWithBranches = branchCounts.filter((b) => b.count > 1).length;
+  ok(res, { overview: { businesses, owners, pendingPayments, activeSubs, shopsWithBranches } });
 });
 
 // @route GET /api/admin/payments?status=pending
@@ -73,9 +77,29 @@ export const reviewPayment = asyncHandler(async (req, res) => {
 });
 
 // @route GET /api/admin/businesses
+// Every business gets one auto-created "Main Branch" (see ensureMainBranches); a shop
+// only shows up as having "added branches" once it has more than that one. We attach
+// each business's branch list here so the superadmin can see who set up branches
+// without opening a second screen.
 export const listBusinesses = asyncHandler(async (req, res) => {
   const businesses = await Business.find().populate('owner', 'name email phone isActive').sort('-createdAt');
-  ok(res, { businesses });
+  const branches = await Branch.find().select('business name isMainBranch isActive').sort('-isMainBranch name').lean();
+  const byBusiness = new Map();
+  for (const b of branches) {
+    const key = String(b.business);
+    if (!byBusiness.has(key)) byBusiness.set(key, []);
+    byBusiness.get(key).push(b);
+  }
+  const withBranches = businesses.map((biz) => {
+    const list = byBusiness.get(String(biz._id)) || [];
+    return {
+      ...biz.toObject(),
+      branches: list,
+      branchCount: list.length,
+      hasExtraBranches: list.length > 1, // more than just the default Main Branch
+    };
+  });
+  ok(res, { businesses: withBranches });
 });
 
 // @route POST /api/admin/owners  (Super Admin creates an Owner + their shop)
