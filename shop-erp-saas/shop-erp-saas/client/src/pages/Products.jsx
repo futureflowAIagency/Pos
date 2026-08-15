@@ -74,14 +74,35 @@ export default function Products() {
 
   // Whenever the Topbar's phone scanner is connected, every code it scans lands
   // here — same handling as typing into the "Scan barcode" box above. Paused
-  // while Manage IMEIs is open for a specific product (unitsFor set) — that
-  // modal takes over the connection itself (see UnitsModal below) so a scanned
-  // device IMEI adds a unit to THAT product instead of being misread as a
-  // product barcode here (which would 404 and offer to create a new product).
+  // whenever ANY product modal is open (Manage IMEIs, or the Add/Edit Product
+  // form) — those take over the connection themselves below, because reading
+  // an unrecognized code (a device IMEI) as a product barcode here would 404
+  // and silently replace whatever form is already open with a fresh
+  // "create product" prefill — exactly the confusing behavior being avoided.
   const { subscribe: subscribeScanner } = useScanner();
   useEffect(() => (
-    serialEnabled && !unitsFor ? subscribeScanner((code) => onScan(code)) : undefined
-  ), [subscribeScanner, serialEnabled, unitsFor]);
+    serialEnabled && !unitsFor && !modal ? subscribeScanner((code) => onScan(code)) : undefined
+  ), [subscribeScanner, serialEnabled, unitsFor, modal]);
+
+  // While the Add/Edit Product modal is open, a scanned code is far more useful
+  // filling in whatever's being entered there than looked up against the whole
+  // catalog. Editing one product has no inline IMEI field (Manage IMEIs handles
+  // that separately) so a scan fills its barcode instead; creating feeds the
+  // IMEI/serial textarea of whichever item is tracked by serial, appended as a
+  // new line — same format as pasting a bulk list there.
+  useEffect(() => {
+    if (!modal) return undefined;
+    return subscribeScanner((code) => {
+      const value = code.trim();
+      if (!value) return;
+      if (editId) { setForm((f) => ({ ...f, barcode: value })); return; }
+      setItems((arr) => {
+        const idx = arr.findIndex((it) => it.trackSerial);
+        if (idx === -1) return arr.map((it, i) => (i === 0 ? { ...it, barcode: value } : it));
+        return arr.map((it, i) => (i === idx ? { ...it, imeis: it.imeis ? `${it.imeis}\n${value}` : value } : it));
+      });
+    });
+  }, [modal, editId, subscribeScanner]);
 
   // One click: every in-stock product (for the currently selected category, or
   // all of them), grouped by supplier/dealer so it's clear whose stock is whose.
