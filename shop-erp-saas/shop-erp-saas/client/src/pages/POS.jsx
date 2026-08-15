@@ -353,22 +353,28 @@ export default function POS() {
   // Poll the session for newly-submitted scans while the QR modal is open. Kept
   // to plain REST polling (no new server infra like WebSockets) — a ~1.5s delay
   // is imperceptible for scan-to-cart, and it reuses the exact same api client
-  // every other page already uses.
+  // every other page already uses. Only a genuine 404 (server confirms the
+  // session is really gone) closes the modal — a single dropped poll on a flaky
+  // connection must not silently end a session the phone is still using.
   useEffect(() => {
     if (!phoneScan) return;
+    let misses = 0;
     const poll = async () => {
       try {
         const { data } = await api.get(`/scan-sessions/${phoneScan.sessionId}`, { params: { t: phoneScan.token } });
+        misses = 0;
         const fresh = data.data.scans.filter((s) => !seenScanIds.current.has(s._id));
         for (const s of fresh) {
           seenScanIds.current.add(s._id);
           setPhoneCount((n) => n + 1);
           await resolveAndAddCode(s.value);
         }
-      } catch {
-        toast.error('Phone scan session ended');
-        setPhoneScan(null);
-        setPhoneQr('');
+      } catch (e) {
+        if (e.response || ++misses >= 3) {
+          toast.error('Phone scan session ended');
+          setPhoneScan(null);
+          setPhoneQr('');
+        }
       }
     };
     const t = setInterval(poll, 1500);
