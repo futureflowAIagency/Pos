@@ -10,6 +10,7 @@ import StockReport from '../components/print/StockReport.jsx';
 import { taka, fmtDate, expiryStatus, daysUntil } from '../utils/format.js';
 import { useConfirm } from '../context/ConfirmContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useScanner } from '../context/ScannerContext.jsx';
 
 const empty = {
   name: '', sku: '', category: 'General', unit: 'pcs', purchasePrice: 0, sellingPrice: 0,
@@ -71,6 +72,13 @@ export default function Products() {
   useEffect(() => { const t = setTimeout(load, 300); return () => clearTimeout(t); }, [search, categoryFilter]);
   useEffect(() => { api.get('/suppliers').then(({ data }) => setSupplierList(data.data.suppliers)).catch(() => {}); }, []);
 
+  // Whenever the Topbar's phone scanner is connected, every code it scans lands
+  // here — same handling as typing into the "Scan barcode" box above (only
+  // active when this page is actually mounted, so scanning while on POS still
+  // goes to the cart, not here).
+  const { subscribe: subscribeScanner } = useScanner();
+  useEffect(() => (serialEnabled ? subscribeScanner((code) => onScan(code)) : undefined), [subscribeScanner, serialEnabled]);
+
   // One click: every in-stock product (for the currently selected category, or
   // all of them), grouped by supplier/dealer so it's clear whose stock is whose.
   const openStockReport = async () => {
@@ -94,9 +102,11 @@ export default function Products() {
 
   // Scan/enter a barcode: if it matches an existing product, don't create a new
   // one — for IMEI-tracked products jump straight to adding a new device (req 1),
-  // otherwise open the product for a stock edit.
-  const onScan = async () => {
-    const code = scanCode.trim();
+  // otherwise open the product for a stock edit. `explicitCode` lets the
+  // connected phone scanner (see ScannerContext) drive this the same way typing
+  // + Enter in the box above does, without going through the input's state.
+  const onScan = async (explicitCode) => {
+    const code = (explicitCode ?? scanCode).trim();
     if (!code) return;
     try {
       const { data } = await api.get(`/products/barcode/${encodeURIComponent(code)}`);

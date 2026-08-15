@@ -125,8 +125,8 @@ export default function ScanRemote() {
       {status === 'invalid' && (
         <div className="text-center max-w-xs mt-10">
           <AlertTriangle size={40} className="mx-auto text-amber-400 mb-3" />
-          <p className="font-medium">This QR code has expired or was closed.</p>
-          <p className="text-sm text-slate-400 mt-2">Go back to the POS and tap "Scan with Phone" again to get a new one.</p>
+          <p className="font-medium">This scanner connection has ended.</p>
+          <p className="text-sm text-slate-400 mt-2">Open the phone-scanner icon in the app's top bar and connect again to get a new QR code.</p>
         </div>
       )}
 

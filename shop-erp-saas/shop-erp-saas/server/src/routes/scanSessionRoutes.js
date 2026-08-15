@@ -13,8 +13,8 @@ const router = Router();
 router.get('/:id', getScanSession);
 router.post('/:id/scans', submitScan);
 
-// POS-side, authenticated.
-router.post('/', protect, requireBusiness, resolveBranch, requireModule('pos'), createScanSession);
-router.delete('/:id', protect, requireBusiness, resolveBranch, requireModule('pos'), closeScanSession);
+// Authenticated — the connection is app-wide (Topbar), reachable from POS or Products.
+router.post('/', protect, requireBusiness, resolveBranch, requireModule('pos', 'products'), createScanSession);
+router.delete('/:id', protect, requireBusiness, resolveBranch, requireModule('pos', 'products'), closeScanSession);
 
 export default router;

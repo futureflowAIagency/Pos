@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Minus, Trash2, Search, Printer, Receipt, PauseCircle, ListChecks, ScanLine, Smartphone } from 'lucide-react';
+import { Plus, Minus, Trash2, Search, Printer, Receipt, PauseCircle, ListChecks, ScanLine } from 'lucide-react';
 import toast from 'react-hot-toast';
-import QRCode from 'qrcode';
 import api from '../api/axios.js';
 import { taka, fmtDate, fmtDateTime, expiryStatus, daysUntil } from '../utils/format.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useScanner } from '../context/ScannerContext.jsx';
 import Modal from '../components/ui/Modal.jsx';
-import Spinner from '../components/ui/Spinner.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import ThermalReceipt from '../components/print/ThermalReceipt.jsx';
 
@@ -75,12 +74,8 @@ export default function POS() {
   const [holdsOpen, setHoldsOpen] = useState(false);
   // mobile IMEI scan
   const [imei, setImei] = useState('');
-  // "Scan with Phone" — a QR-paired remote camera scan session, no app install.
-  // See scanSessionRoutes.js for how the session/token works.
-  const [phoneScan, setPhoneScan] = useState(null); // { sessionId, token, expiresAt }
-  const [phoneQr, setPhoneQr] = useState('');
-  const [phoneCount, setPhoneCount] = useState(0);
-  const seenScanIds = useRef(new Set());
+  // Connected phone scanner (Topbar) — subscribed below once resolveAndAddCode exists.
+  const { subscribe: subscribeScanner } = useScanner();
 
   // Mouse-free checkout chain: search → customer phone → name → (NID) →
   // discount → first payment amount → Complete Sale. Each field's Enter key
@@ -332,54 +327,9 @@ export default function POS() {
     setImei('');
   };
 
-  // ---------- "Scan with Phone" (QR-paired remote camera, no app) ----------
-  const openPhoneScan = async () => {
-    try {
-      const { data } = await api.post('/scan-sessions');
-      const { sessionId, token, url, expiresAt } = data.data;
-      seenScanIds.current = new Set();
-      setPhoneCount(0);
-      setPhoneScan({ sessionId, token, expiresAt });
-      setPhoneQr(await QRCode.toDataURL(url, { margin: 1, width: 260 }));
-    } catch (e) { toast.error(e.response?.data?.message || 'Could not start phone scan'); }
-  };
-
-  const closePhoneScan = () => {
-    if (phoneScan) api.delete(`/scan-sessions/${phoneScan.sessionId}`).catch(() => {});
-    setPhoneScan(null);
-    setPhoneQr('');
-  };
-
-  // Poll the session for newly-submitted scans while the QR modal is open. Kept
-  // to plain REST polling (no new server infra like WebSockets) — a ~1.5s delay
-  // is imperceptible for scan-to-cart, and it reuses the exact same api client
-  // every other page already uses. Only a genuine 404 (server confirms the
-  // session is really gone) closes the modal — a single dropped poll on a flaky
-  // connection must not silently end a session the phone is still using.
-  useEffect(() => {
-    if (!phoneScan) return;
-    let misses = 0;
-    const poll = async () => {
-      try {
-        const { data } = await api.get(`/scan-sessions/${phoneScan.sessionId}`, { params: { t: phoneScan.token } });
-        misses = 0;
-        const fresh = data.data.scans.filter((s) => !seenScanIds.current.has(s._id));
-        for (const s of fresh) {
-          seenScanIds.current.add(s._id);
-          setPhoneCount((n) => n + 1);
-          await resolveAndAddCode(s.value);
-        }
-      } catch (e) {
-        if (e.response || ++misses >= 3) {
-          toast.error('Phone scan session ended');
-          setPhoneScan(null);
-          setPhoneQr('');
-        }
-      }
-    };
-    const t = setInterval(poll, 1500);
-    return () => clearInterval(t);
-  }, [phoneScan]);
+  // Whenever the Topbar's phone scanner is connected, every code it scans comes
+  // through here — same handling as a typed/hardware-scanner code.
+  useEffect(() => subscribeScanner(resolveAndAddCode), [subscribeScanner]);
 
   const changeQty = (key, d) => setCart((c) => c.map((i) => (lineKey(i) === key && !i.unitId) ? { ...i, qty: clampQty(i.qty + d, i.stock) } : i));
   // direct quantity entry (supports decimals, e.g. 1.5 kg); empty string allowed while typing
@@ -502,9 +452,6 @@ export default function POS() {
             </button>
             <button className="btn-ghost" onClick={() => setHoldsOpen(true)}>
               <ListChecks size={16} /> Held Bills {holds.length > 0 && <span className="badge bg-amber-100 text-amber-700">{holds.length}</span>}
-            </button>
-            <button className="btn-ghost" onClick={openPhoneScan}>
-              <Smartphone size={16} /> Scan with Phone
             </button>
           </div>
         </div>
@@ -798,24 +745,6 @@ export default function POS() {
             ))}
           </div>
         )}
-      </Modal>
-
-      {/* Scan with Phone — QR-paired remote camera, no app install */}
-      <Modal open={!!phoneScan} onClose={closePhoneScan} title="Scan with Phone">
-        <div className="flex flex-col items-center gap-3 text-center">
-          {phoneQr ? (
-            <img src={phoneQr} alt="Scan this with your phone" className="rounded-lg border border-slate-200 dark:border-slate-700" />
-          ) : <Spinner />}
-          <p className="text-sm text-slate-500">
-            Open your phone's camera and point it at this QR code — no app to install.
-            It opens a scan page in your phone's browser; every barcode/IMEI you scan there
-            appears in this cart within a second or two.
-          </p>
-          <p className="text-xs text-slate-400">Valid for 10 minutes. Closing this window ends the session.</p>
-          {phoneCount > 0 && (
-            <p className="text-sm font-medium text-brand-600">{phoneCount} item{phoneCount > 1 ? 's' : ''} added from phone</p>
-          )}
-        </div>
       </Modal>
 
       {/* Past invoices — search by phone/name and reprint */}

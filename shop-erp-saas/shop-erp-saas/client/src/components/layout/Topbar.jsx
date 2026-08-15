@@ -3,6 +3,7 @@ import { useTheme } from '../../context/ThemeContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useLang } from '../../context/LanguageContext.jsx';
 import NotificationBell from './NotificationBell.jsx';
+import ScannerWidget from './ScannerWidget.jsx';
 
 export default function Topbar({ onMenu }) {
   const { theme, toggleTheme } = useTheme();
@@ -30,6 +31,7 @@ export default function Topbar({ onMenu }) {
             </select>
           </div>
         )}
+        <ScannerWidget />
         <NotificationBell />
         <button onClick={toggleLang} className="btn-ghost p-2 flex items-center gap-1" title={t('Toggle language')}>
           <Languages size={18} />
