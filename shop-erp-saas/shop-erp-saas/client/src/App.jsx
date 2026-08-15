@@ -4,6 +4,7 @@ import ProtectedRoute from './routes/ProtectedRoute.jsx';
 import AdminRoute from './routes/AdminRoute.jsx';
 
 import Login from './pages/Login.jsx';
+import ScanRemote from './pages/ScanRemote.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Products from './pages/Products.jsx';
 import POS from './pages/POS.jsx';
@@ -31,6 +32,9 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Navigate to="/login" replace />} />
+      {/* Public — no login. A phone opens this after scanning a POS "Scan with
+          Phone" QR code; access is gated by the session id + token in the URL. */}
+      <Route path="/scan/:id" element={<ScanRemote />} />
 
       <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route path="/" element={<Dashboard />} />

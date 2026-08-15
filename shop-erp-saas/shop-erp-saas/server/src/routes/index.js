@@ -25,6 +25,7 @@ import exportRoutes from './exportRoutes.js';
 import importRoutes from './importRoutes.js';
 import transferRoutes from './transferRoutes.js';
 import branchRoutes from './branchRoutes.js';
+import scanSessionRoutes from './scanSessionRoutes.js';
 import { getAppVersion } from '../utils/appVersion.js';
 
 const router = Router();
@@ -56,6 +57,7 @@ router.use('/export', exportRoutes);
 router.use('/import', importRoutes);
 router.use('/transfers', transferRoutes);
 router.use('/branches', branchRoutes);
+router.use('/scan-sessions', scanSessionRoutes);
 
 router.get('/health', (req, res) => res.json({ success: true, message: 'API healthy', ts: Date.now() }));
 // Public (no auth) — the Sidebar polls this to notice a fresh deploy and
