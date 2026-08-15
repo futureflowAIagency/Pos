@@ -424,8 +424,17 @@ function SupplierProductsModal({ supplier, onClose }) {
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 font-semibold sticky bottom-0">
+                <td className="px-3 py-2">Total</td>
+                <td className="px-3 py-2 text-right">{rows.reduce((s, r) => s + (r.purchasedQty || 0), 0)}</td>
+                <td className="px-3 py-2 text-right">{rows.reduce((s, r) => s + (r.soldQty || 0), 0)}</td>
+                <td className="px-3 py-2 text-right">{rows.reduce((s, r) => s + (r.returnedQty || 0), 0)}</td>
+                <td className="px-3 py-2 text-right">{rows.reduce((s, r) => s + (r.currentStock || 0), 0)}</td>
+              </tr>
+            </tfoot>
           </table>
-          <p className="text-xs text-slate-400 p-3">Sold is net of returns — a returned item goes back into stock and stops counting as sold. Sold/Returned/Current Stock are shop-wide for each product (a sale doesn't record which supplier a specific unit came from).</p>
+          <p className="text-xs text-slate-400 p-3">Sold is net of returns — a returned item goes back into stock and stops counting as sold. Sold/Returned/Current Stock are shop-wide for each product (a sale doesn't record which supplier a specific unit came from). Purchased is a historical record of what was recorded as bought, so it won't go back down if a wrongly-entered IMEI is later deleted from Manage IMEIs — that only corrects Current Stock (the delete really is applied; Purchased simply isn't meant to move).</p>
         </div>
       )}
     </Modal>

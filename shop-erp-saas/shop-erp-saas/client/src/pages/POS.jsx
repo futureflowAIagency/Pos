@@ -171,15 +171,35 @@ export default function POS() {
   };
 
   // Add one specific serial-tracked device (by IMEI/serial) to the cart.
-  const pushUnit = (u) => {
-    const p = u.product;
+  // By default this re-verifies the unit against the server first: `u` usually
+  // comes from a debounced search result (unitResults / suggestList) that can
+  // go stale — the device may have been deleted, corrected, or sold in another
+  // tab/session since it was fetched. Clicking a stale card used to add it to
+  // the cart anyway (only caught, confusingly, at final checkout); now it's
+  // caught immediately, right where the mistake would happen. `addByImei`
+  // already just fetched a fresh unit itself, so it passes `fresh: true` to
+  // skip the redundant round-trip.
+  const pushUnit = async (u, { fresh = false } = {}) => {
+    let unit = u;
+    if (!fresh) {
+      const code = u.imei1 || u.imei2 || u.serial;
+      try {
+        const { data } = await api.get('/units/lookup', { params: { imei: code } });
+        unit = data.data.unit;
+      } catch {
+        toast.error('This device is no longer in stock — it may have been removed or already sold');
+        setUnitResults((list) => list.filter((x) => x._id !== u._id));
+        return;
+      }
+    }
+    const p = unit.product;
     const expired = expiryBlock(p);
     if (expired) { toast.error(expired); return; }
     setCart((c) => {
-      if (c.some((i) => i.unitId === u._id)) { toast.error('Device already in cart'); return c; }
+      if (c.some((i) => i.unitId === unit._id)) { toast.error('Device already in cart'); return c; }
       return [...c, {
         _id: p._id, name: p.name, sellingPrice: p.sellingPrice, discountPercent: p.discountPercent || 0,
-        qty: 1, unitId: u._id, imei1: u.imei1, imei2: u.imei2, serial: u.serial,
+        qty: 1, unitId: unit._id, imei1: unit.imei1, imei2: unit.imei2, serial: unit.serial,
       }];
     });
   };
@@ -282,7 +302,7 @@ export default function POS() {
     // 1) a serial-tracked device by IMEI / serial (e.g. a phone, or a generated serial)
     try {
       const { data } = await api.get('/units/lookup', { params: { imei: term } });
-      pushUnit(data.data.unit);
+      await pushUnit(data.data.unit, { fresh: true });
       setImei('');
       return;
     } catch { /* not a device — fall through to product-barcode lookup */ }

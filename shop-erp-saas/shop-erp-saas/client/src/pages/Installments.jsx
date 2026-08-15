@@ -224,9 +224,24 @@ export default function Installments() {
     }));
   };
 
-  const pickUnit = (id) => {
-    const u = units.find((x) => x._id === id);
-    setForm((f) => ({ ...f, unit: u?._id || null, imei1: u?.imei1 || '', imei2: u?.imei2 || '', serial: u?.serial || '' }));
+  // Re-verifies the picked device against the server before locking it into the
+  // plan — the dropdown's list was fetched once when the product was applied and
+  // can go stale by the time it's picked (deleted/corrected in Products, or sold
+  // through POS in another tab). Same reasoning as POS's pushUnit: catch it right
+  // here instead of surprising the shopkeeper at "Create Plan".
+  const pickUnit = async (id) => {
+    if (!id) return setForm((f) => ({ ...f, unit: null, imei1: '', imei2: '', serial: '' }));
+    const cached = units.find((x) => x._id === id);
+    const code = cached ? (cached.imei1 || cached.serial) : id;
+    try {
+      const { data } = await api.get('/units/lookup', { params: { imei: code } });
+      const u = data.data.unit;
+      setForm((f) => ({ ...f, unit: u._id, imei1: u.imei1, imei2: u.imei2, serial: u.serial }));
+    } catch {
+      toast.error('This device is no longer available — it may have been removed or already sold');
+      setUnits((list) => list.filter((x) => x._id !== id));
+      setForm((f) => ({ ...f, unit: null, imei1: '', imei2: '', serial: '' }));
+    }
   };
 
   const create = async () => {
