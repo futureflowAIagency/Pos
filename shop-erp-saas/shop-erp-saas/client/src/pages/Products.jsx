@@ -73,11 +73,15 @@ export default function Products() {
   useEffect(() => { api.get('/suppliers').then(({ data }) => setSupplierList(data.data.suppliers)).catch(() => {}); }, []);
 
   // Whenever the Topbar's phone scanner is connected, every code it scans lands
-  // here — same handling as typing into the "Scan barcode" box above (only
-  // active when this page is actually mounted, so scanning while on POS still
-  // goes to the cart, not here).
+  // here — same handling as typing into the "Scan barcode" box above. Paused
+  // while Manage IMEIs is open for a specific product (unitsFor set) — that
+  // modal takes over the connection itself (see UnitsModal below) so a scanned
+  // device IMEI adds a unit to THAT product instead of being misread as a
+  // product barcode here (which would 404 and offer to create a new product).
   const { subscribe: subscribeScanner } = useScanner();
-  useEffect(() => (serialEnabled ? subscribeScanner((code) => onScan(code)) : undefined), [subscribeScanner, serialEnabled]);
+  useEffect(() => (
+    serialEnabled && !unitsFor ? subscribeScanner((code) => onScan(code)) : undefined
+  ), [subscribeScanner, serialEnabled, unitsFor]);
 
   // One click: every in-stock product (for the currently selected category, or
   // all of them), grouped by supplier/dealer so it's clear whose stock is whose.
@@ -670,6 +674,16 @@ function UnitsModal({ product, isMobile, onClose, onChanged }) {
     setUnits(data.data.units);
   };
   useEffect(() => { load(); }, [product._id]);
+
+  // While this modal is open it takes over the connected phone scanner (the
+  // Products page's own subscription is paused for exactly this reason — see
+  // there) — a scanned device IMEI/serial adds a unit straight to THIS product,
+  // the same as typing it into the box below and clicking Add.
+  const { subscribe } = useScanner();
+  useEffect(() => subscribe((code) => {
+    const value = code.trim();
+    if (value) submit([isMobile ? { imei1: value } : { serial: value }]);
+  }), [subscribe, isMobile]);
 
   const submit = async (payloadUnits) => {
     if (!payloadUnits.length) return;
