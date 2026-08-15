@@ -73,7 +73,7 @@ export function ScannerProvider({ children }) {
         }
       }
     };
-    const t = setInterval(poll, 1500);
+    const t = setInterval(poll, 700);
     return () => clearInterval(t);
   }, [session]);
 

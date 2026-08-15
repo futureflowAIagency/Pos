@@ -5,8 +5,33 @@ import { Camera, CheckCircle2, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 
-const DEDUPE_MS = 1500; // ignore the exact same code scanned again within this window
 const RECHECK_MS = 20000; // notice a POS-side close/expiry even between scans
+// How long the SAME code must go completely undetected before it can be
+// submitted again — refreshed every frame it's still seen, so holding the
+// phone steady on one barcode for any length of time submits it exactly once,
+// not repeatedly. Only a genuinely new/different code (or the same one after a
+// real pause) triggers another submit.
+const SAME_CODE_COOLDOWN_MS = 1000;
+// A decoded barcode only counts if it crosses the middle guide line — the
+// vertical position of its own points, as a fraction of the frame height, must
+// fall in this band. This is what lets the shopkeeper pick which barcode gets
+// read when several are printed close together on one label (IMEI1/IMEI2/
+// Serial), instead of the library grabbing whichever one it finds first.
+const TARGET_BAND = [0.35, 0.65];
+
+// True if the decoded barcode's own points sit near the vertical middle of the
+// captured frame. `video.videoHeight` is the camera's native frame height
+// (not the CSS box size) — result points come in that same coordinate space,
+// so this works regardless of how the video is cropped/displayed on screen
+// (object-cover crops symmetrically around the center by default, so the
+// video's native vertical center still lines up with the on-screen guide line).
+const crossesTargetLine = (result, video) => {
+  const points = result.getResultPoints?.();
+  if (!points?.length || !video?.videoHeight) return true; // no data to judge — don't block
+  const avgY = points.reduce((s, p) => s + p.getY(), 0) / points.length;
+  const frac = avgY / video.videoHeight;
+  return frac > TARGET_BAND[0] && frac < TARGET_BAND[1];
+};
 
 // The page a phone opens after scanning a POS "Scan with Phone" QR code. No
 // login — access is gated entirely by the session id + token in the URL. Reads
@@ -19,7 +44,11 @@ export default function ScanRemote() {
 
   const videoRef = useRef(null);
   const controlsRef = useRef(null);
-  const lastRef = useRef({ value: '', at: 0 });
+  // { value, timer } — `value` is null whenever nothing is "currently held in
+  // view"; `timer` re-arms on every frame the same code is still seen, so it
+  // only clears (allowing a resubmit) after SAME_CODE_COOLDOWN_MS of the code
+  // being genuinely gone from frame, not on a fixed schedule.
+  const lastRef = useRef({ value: null, timer: null });
 
   const [status, setStatus] = useState('checking'); // checking | scanning | invalid | camera-error
   const [businessName, setBusinessName] = useState('');
@@ -77,23 +106,34 @@ export default function ScanRemote() {
     return () => clearInterval(t);
   }, [status, id, token]);
 
-  // 3) start the camera and continuously decode while the session is valid
+  // 3) start the camera and continuously decode while the session is valid.
+  // Runs a fast decode loop (the library's default 500ms-between-attempts is
+  // most of the "feels slow" complaint) and retries once on its own if the
+  // very first start renders a black frame — a known Android WebView quirk
+  // right after a fresh page load, which previously needed a manual reload.
   useEffect(() => {
     if (status !== 'scanning') return;
-    const reader = new BrowserMultiFormatReader();
     let stopped = false;
+    let watchdog;
 
-    reader.decodeFromVideoDevice(undefined, videoRef.current, async (result) => {
-      if (stopped || !result) return;
+    const submit = async (result) => {
       const value = result.getText();
-      const now = Date.now();
-      if (value === lastRef.current.value && now - lastRef.current.at < DEDUPE_MS) return;
-      lastRef.current = { value, at: now };
+      // Only counts if it's crossing the on-screen guide line — lets the
+      // shopkeeper choose which of several close-together barcodes gets read.
+      if (!crossesTargetLine(result, videoRef.current)) return;
+
+      // Same code still in view → just keep the "still seen" timer alive,
+      // don't resubmit. Only a genuinely new value, or the same one again
+      // after it was truly out of frame for a while, gets sent.
+      clearTimeout(lastRef.current.timer);
+      lastRef.current.timer = setTimeout(() => { lastRef.current.value = null; }, SAME_CODE_COOLDOWN_MS);
+      if (value === lastRef.current.value) return;
+      lastRef.current.value = value;
 
       const format = BarcodeFormat[result.getBarcodeFormat()] || '';
       try {
         await api.post(`/scan-sessions/${id}/scans`, { value, format, t: token });
-        setSent((list) => [{ value, at: now }, ...list].slice(0, 15));
+        setSent((list) => [{ value, at: Date.now() }, ...list].slice(0, 15));
         if (navigator.vibrate) navigator.vibrate(80);
       } catch (e) {
         if (e.response) {
@@ -105,11 +145,33 @@ export default function ScanRemote() {
           toast.error(`"${value}" didn't send — check your connection and try again`);
         }
       }
-    }).then((controls) => { if (!stopped) controlsRef.current = controls; else controls.stop(); })
-      .catch(() => { setStatus('camera-error'); });
+    };
+
+    const start = (attempt = 1) => {
+      const reader = new BrowserMultiFormatReader(undefined, {
+        delayBetweenScanAttempts: 100,
+        delayBetweenScanSuccess: 100,
+      });
+      reader.decodeFromVideoDevice(undefined, videoRef.current, (result) => {
+        if (!stopped && result) submit(result);
+      }).then((controls) => {
+        if (stopped) { controls.stop(); return; }
+        controlsRef.current = controls;
+        watchdog = setTimeout(() => {
+          const v = videoRef.current;
+          if (!stopped && attempt < 2 && v && (v.readyState < 2 || v.videoWidth === 0)) {
+            controls.stop();
+            start(attempt + 1);
+          }
+        }, 1500);
+      }).catch(() => { if (!stopped) setStatus('camera-error'); });
+    };
+    start();
 
     return () => {
       stopped = true;
+      clearTimeout(watchdog);
+      clearTimeout(lastRef.current.timer);
       controlsRef.current?.stop();
       controlsRef.current = null;
     };
@@ -142,8 +204,12 @@ export default function ScanRemote() {
         <div className="w-full max-w-sm space-y-4">
           <div className="relative rounded-xl overflow-hidden border-2 border-brand-500 aspect-square bg-black">
             <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
+            {/* Guide line — only a barcode crossing this line gets read (see
+                crossesTargetLine), so several close-together codes on one
+                label can be told apart by lining up just the one you want. */}
+            <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-0.5 bg-red-500 shadow-[0_0_6px_2px_rgba(239,68,68,0.7)] pointer-events-none" />
           </div>
-          <p className="text-center text-sm text-slate-400">Point the camera at a barcode, QR code, or IMEI sticker</p>
+          <p className="text-center text-sm text-slate-400">Line up the barcode/IMEI with the red line</p>
 
           {sent.length > 0 && (
             <div className="bg-slate-800 rounded-lg p-3 space-y-1.5 max-h-52 overflow-y-auto">
