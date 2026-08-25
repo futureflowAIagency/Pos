@@ -1,12 +1,14 @@
 import { taka, fmtDateTime } from '../../utils/format.js';
+import { thermalWidthClass } from '../../utils/printWidth.js';
 
-// 80mm thermal roll receipt — service / repair job sheet
+// Thermal roll receipt — service / repair job sheet. Width (58mm/80mm)
+// follows the shop's Settings → Receipt Paper Width.
 export default function ServiceThermal({ job, business }) {
   if (!job) return null;
   const total = job.total ?? (job.serviceFee || 0); // customer bill = service charge only
   const due = Math.max(0, total - (job.paid || 0));
   return (
-    <div className="print-thermal">
+    <div className={`print-thermal ${thermalWidthClass(business)}`}>
       <div style={{ textAlign: 'center' }}>
         {business?.logoUrl ? (
           <img src={business.logoUrl} alt="Logo" style={{ maxHeight: 40, maxWidth: '60%', objectFit: 'contain', margin: '0 auto 4px' }} />

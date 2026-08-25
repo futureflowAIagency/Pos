@@ -1,9 +1,10 @@
 import { taka, fmtDateTime } from '../../utils/format.js';
+import { thermalWidthClass } from '../../utils/printWidth.js';
 
 export default function DueReceipt({ customer, amount, method, business }) {
   if (!customer) return null;
   return (
-    <div className="print-thermal">
+    <div className={`print-thermal ${thermalWidthClass(business)}`}>
       <div style={{ textAlign: 'center' }}>
         <h1 style={{ fontWeight: 700 }}>{business?.name}</h1>
         <div>DUE PAYMENT RECEIPT</div>

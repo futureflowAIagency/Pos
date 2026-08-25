@@ -1,4 +1,5 @@
 import { taka, fmtDateTime } from '../../utils/format.js';
+import { thermalWidthClass } from '../../utils/printWidth.js';
 
 // Per-instalment payment receipt (req 10): customer, product/IMEI, this
 // payment's amount/no, previous paid, remaining balance, method, date.
@@ -11,7 +12,7 @@ export default function EmiPaymentInvoice({ installment, row, business }) {
   const remaining = Math.max(0, (installment.totalAmount || 0) - totalPaid);
 
   return (
-    <div className="print-thermal">
+    <div className={`print-thermal ${thermalWidthClass(business)}`}>
       <div style={{ textAlign: 'center' }}>
         {business?.logoUrl ? (
           <img src={business.logoUrl} alt="Logo" style={{ maxHeight: 40, maxWidth: '60%', objectFit: 'contain', margin: '0 auto 4px' }} />

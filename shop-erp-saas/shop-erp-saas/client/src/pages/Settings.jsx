@@ -46,6 +46,7 @@ export default function Settings() {
           lowStockThreshold: business.settings?.lowStockThreshold ?? 5,
           printMode: business.settings?.printMode || 'a4',
           returnWindowDays: business.settings?.returnWindowDays ?? 7,
+          printWidthMm: business.settings?.printWidthMm ?? 80,
         },
       });
     }
@@ -56,7 +57,7 @@ export default function Settings() {
   const save = async () => {
     setSaving(true);
     try {
-      await api.put('/business', { ...form, settings: { ...form.settings, lowStockThreshold: +form.settings.lowStockThreshold, returnWindowDays: +form.settings.returnWindowDays } });
+      await api.put('/business', { ...form, settings: { ...form.settings, lowStockThreshold: +form.settings.lowStockThreshold, returnWindowDays: +form.settings.returnWindowDays, printWidthMm: +form.settings.printWidthMm } });
       await refresh();
       toast.success('Settings saved');
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
@@ -131,6 +132,14 @@ export default function Settings() {
               <option value={30}>30 days</option>
             </select>
             <p className="text-xs text-slate-400 mt-1">After this window, only the shop owner can process a return/exchange.</p>
+          </div>
+          <div>
+            <label className="label">Receipt Paper Width</label>
+            <select className="input" value={form.settings.printWidthMm} onChange={(e) => setS('printWidthMm', e.target.value)}>
+              <option value={80}>80mm</option>
+              <option value={58}>58mm</option>
+            </select>
+            <p className="text-xs text-slate-400 mt-1">Must match your thermal printer's actual roll — the wrong size gets cut off on the right, not resized.</p>
           </div>
         </div>
         <div className="flex items-center justify-between pt-2">

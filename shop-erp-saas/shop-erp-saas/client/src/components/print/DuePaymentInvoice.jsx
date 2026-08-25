@@ -1,4 +1,5 @@
 import { taka, fmtDateTime, fmtDate } from '../../utils/format.js';
+import { thermalWidthClass } from '../../utils/printWidth.js';
 
 // Per-invoice due-payment receipt (req 11). Shows customer + product + IMEI +
 // purchase date + total, and the previous-paid / current-payment / remaining-due
@@ -8,7 +9,7 @@ export default function DuePaymentInvoice({ sale, duePayment, business }) {
   const previousPaid = Math.max(0, (sale.total || 0) - (duePayment.previousDue || 0));
   const first = sale.items?.[0];
   return (
-    <div className="print-thermal">
+    <div className={`print-thermal ${thermalWidthClass(business)}`}>
       <div style={{ textAlign: 'center' }}>
         {business?.logoUrl ? (
           <img src={business.logoUrl} alt="Logo" style={{ maxHeight: 40, maxWidth: '60%', objectFit: 'contain', margin: '0 auto 4px' }} />

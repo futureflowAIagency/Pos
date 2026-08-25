@@ -40,9 +40,14 @@ body {
   font-size: 13px;
 }
 
-/* Thermal 80mm roll layout (pharmacy / POS) */
+/* Thermal roll layout (pharmacy / POS). Width varies by the shop's actual
+   printer — Settings → Receipt Paper Width picks .print-thermal-58 or
+   .print-thermal-80, applied alongside this shared base class. Getting this
+   wrong doesn't wrap text onto more lines, it gets silently cut off by the
+   printer hardware past the physical paper edge, so the two width variants
+   are real CSS classes (not just an inline style) and are repeated inside
+   @media print since that's the context that actually matters when printing. */
 .print-thermal {
-  width: 80mm;
   padding: 4mm 3mm;
   margin: 0 auto;
   background: #fff;
@@ -51,6 +56,8 @@ body {
   font-size: 11px;
   line-height: 1.35;
 }
+.print-thermal-80 { width: 80mm; }
+.print-thermal-58 { width: 58mm; font-size: 10px; padding: 3mm 2mm; }
 .print-thermal h1, .print-thermal h2 { font-size: 13px; margin: 0; }
 .print-thermal table { width: 100%; border-collapse: collapse; }
 .print-thermal td { padding: 1px 0; vertical-align: top; }
@@ -58,5 +65,6 @@ body {
 
 @page { margin: 0; }
 @media print {
-  .print-thermal { width: 80mm; }
+  .print-thermal-80 { width: 80mm; }
+  .print-thermal-58 { width: 58mm; }
 }
