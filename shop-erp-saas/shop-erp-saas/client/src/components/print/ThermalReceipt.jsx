@@ -1,9 +1,11 @@
 import { taka, fmtDateTime } from '../../utils/format.js';
-import { thermalWidthClass } from '../../utils/printWidth.js';
+import { thermalWidthClass, thermalPageWidthMm } from '../../utils/printWidth.js';
+import { useThermalPageSize } from '../../utils/printPageSize.js';
 
 // Thermal roll receipt — pharmacy / POS fast print. Width (58mm/80mm) follows
 // the shop's Settings → Receipt Paper Width.
 export default function ThermalReceipt({ sale, business }) {
+  useThermalPageSize(thermalPageWidthMm(business));
   if (!sale) return null;
   return (
     <div className={`print-thermal ${thermalWidthClass(business)}`}>

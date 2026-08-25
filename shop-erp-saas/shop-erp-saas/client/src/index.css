@@ -42,11 +42,18 @@ body {
 
 /* Thermal roll layout (pharmacy / POS). Width varies by the shop's actual
    printer — Settings → Receipt Paper Width picks .print-thermal-58 or
-   .print-thermal-80, applied alongside this shared base class. Getting this
-   wrong doesn't wrap text onto more lines, it gets silently cut off by the
-   printer hardware past the physical paper edge, so the two width variants
-   are real CSS classes (not just an inline style) and are repeated inside
-   @media print since that's the context that actually matters when printing. */
+   .print-thermal-80, applied alongside this shared base class.
+
+   IMPORTANT: these are the PRINTABLE widths, not the nominal roll size. A
+   thermal printhead doesn't reach edge-to-edge — the standard ESC/POS
+   convention (8 dots/mm at 203dpi) is 384 print dots on a 58mm roll and 576
+   on an 80mm roll, i.e. ~48mm and ~72mm of the paper is actually printable.
+   Content sized to the full nominal width overflows the real printable area
+   and gets silently cut off on the right, on every printer, regardless of
+   which of the two settings is picked — the nominal width is only used
+   separately for the @page size (see printPageSize.js), which tells the
+   browser how wide the PAPER itself is; this class controls how wide the
+   PRINTED CONTENT is within it, with margin: 0 auto centering the gap. */
 .print-thermal {
   padding: 4mm 3mm;
   margin: 0 auto;
@@ -55,16 +62,25 @@ body {
   font-family: 'Courier New', monospace;
   font-size: 11px;
   line-height: 1.35;
+  overflow-wrap: anywhere; /* a long unbroken IMEI/invoice number must wrap, never force the box wider */
 }
-.print-thermal-80 { width: 80mm; }
-.print-thermal-58 { width: 58mm; font-size: 10px; padding: 3mm 2mm; }
+.print-thermal-80 { width: 72mm; }
+.print-thermal-58 { width: 48mm; font-size: 10px; padding: 3mm 2mm; }
 .print-thermal h1, .print-thermal h2 { font-size: 13px; margin: 0; }
-.print-thermal table { width: 100%; border-collapse: collapse; }
-.print-thermal td { padding: 1px 0; vertical-align: top; }
+.print-thermal table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.print-thermal td { padding: 1px 0; vertical-align: top; overflow-wrap: anywhere; }
 .thermal-divider { border-top: 1px dashed #000; margin: 4px 0; }
 
+/* Base page margin for every print context (A4 reports rely on this — their
+   own padding is the visual margin, so the browser's own default page margin
+   would otherwise double up). Thermal prints additionally declare @page size
+   at print time via a dynamically-injected <style> tag (printPageSize.js) —
+   an element's CSS `width` only lays out content WITHIN whatever page size
+   the browser already assumes; it never tells the browser what the page size
+   IS, so without this the printer driver's own default silently wins and can
+   clip content sized for a different width. */
 @page { margin: 0; }
 @media print {
-  .print-thermal-80 { width: 80mm; }
-  .print-thermal-58 { width: 58mm; }
+  .print-thermal-80 { width: 72mm; }
+  .print-thermal-58 { width: 48mm; }
 }

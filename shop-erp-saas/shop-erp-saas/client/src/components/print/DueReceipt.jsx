@@ -1,7 +1,9 @@
 import { taka, fmtDateTime } from '../../utils/format.js';
-import { thermalWidthClass } from '../../utils/printWidth.js';
+import { thermalWidthClass, thermalPageWidthMm } from '../../utils/printWidth.js';
+import { useThermalPageSize } from '../../utils/printPageSize.js';
 
 export default function DueReceipt({ customer, amount, method, business }) {
+  useThermalPageSize(thermalPageWidthMm(business));
   if (!customer) return null;
   return (
     <div className={`print-thermal ${thermalWidthClass(business)}`}>

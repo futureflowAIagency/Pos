@@ -1,9 +1,11 @@
 import { taka, fmtDateTime } from '../../utils/format.js';
-import { thermalWidthClass } from '../../utils/printWidth.js';
+import { thermalWidthClass, thermalPageWidthMm } from '../../utils/printWidth.js';
+import { useThermalPageSize } from '../../utils/printPageSize.js';
 
 // Per-instalment payment receipt (req 10): customer, product/IMEI, this
 // payment's amount/no, previous paid, remaining balance, method, date.
 export default function EmiPaymentInvoice({ installment, row, business }) {
+  useThermalPageSize(thermalPageWidthMm(business));
   if (!installment || !row) return null;
   const paidBefore = (installment.schedule || [])
     .filter((s) => s.paid && s.no !== row.no)

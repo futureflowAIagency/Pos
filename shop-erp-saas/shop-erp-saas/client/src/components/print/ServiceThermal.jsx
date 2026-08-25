@@ -1,9 +1,11 @@
 import { taka, fmtDateTime } from '../../utils/format.js';
-import { thermalWidthClass } from '../../utils/printWidth.js';
+import { thermalWidthClass, thermalPageWidthMm } from '../../utils/printWidth.js';
+import { useThermalPageSize } from '../../utils/printPageSize.js';
 
 // Thermal roll receipt — service / repair job sheet. Width (58mm/80mm)
 // follows the shop's Settings → Receipt Paper Width.
 export default function ServiceThermal({ job, business }) {
+  useThermalPageSize(thermalPageWidthMm(business));
   if (!job) return null;
   const total = job.total ?? (job.serviceFee || 0); // customer bill = service charge only
   const due = Math.max(0, total - (job.paid || 0));

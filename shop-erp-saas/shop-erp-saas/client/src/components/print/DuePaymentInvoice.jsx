@@ -1,10 +1,12 @@
 import { taka, fmtDateTime, fmtDate } from '../../utils/format.js';
-import { thermalWidthClass } from '../../utils/printWidth.js';
+import { thermalWidthClass, thermalPageWidthMm } from '../../utils/printWidth.js';
+import { useThermalPageSize } from '../../utils/printPageSize.js';
 
 // Per-invoice due-payment receipt (req 11). Shows customer + product + IMEI +
 // purchase date + total, and the previous-paid / current-payment / remaining-due
 // breakdown with method and date.
 export default function DuePaymentInvoice({ sale, duePayment, business }) {
+  useThermalPageSize(thermalPageWidthMm(business));
   if (!sale || !duePayment) return null;
   const previousPaid = Math.max(0, (sale.total || 0) - (duePayment.previousDue || 0));
   const first = sale.items?.[0];
