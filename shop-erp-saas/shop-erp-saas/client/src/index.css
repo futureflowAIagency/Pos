@@ -25,6 +25,18 @@ body {
 @media print {
   body * { visibility: hidden; }
   .print-area, .print-area * { visibility: visible; }
+  /* The preview modal is position:fixed on screen. Left as-is, it stays the
+     containing block for .print-area when printing — and a fixed box is sized
+     from the VIEWPORT, not the page, so `.print-area { width: 100% }` below
+     would resolve against the browser window's width instead of the paper.
+     Neutralising it here makes .print-area measure against the page itself,
+     which is what every width below assumes. */
+  .no-print-bg {
+    position: static !important;
+    overflow: visible !important;
+    background: none !important;
+    padding: 0 !important;
+  }
   .print-area { position: absolute; left: 0; top: 0; width: 100%; }
   .no-print { display: none !important; }
 }
@@ -40,20 +52,17 @@ body {
   font-size: 13px;
 }
 
-/* Thermal roll layout (pharmacy / POS). Width varies by the shop's actual
-   printer — Settings → Receipt Paper Width picks .print-thermal-58 or
-   .print-thermal-80, applied alongside this shared base class.
+/* Thermal roll layout (pharmacy / POS). Settings → Receipt Paper Width picks
+   .print-thermal-58 or .print-thermal-80 alongside this shared base class.
 
-   IMPORTANT: these are the PRINTABLE widths, not the nominal roll size. A
-   thermal printhead doesn't reach edge-to-edge — the standard ESC/POS
-   convention (8 dots/mm at 203dpi) is 384 print dots on a 58mm roll and 576
-   on an 80mm roll, i.e. ~48mm and ~72mm of the paper is actually printable.
-   Content sized to the full nominal width overflows the real printable area
-   and gets silently cut off on the right, on every printer, regardless of
-   which of the two settings is picked — the nominal width is only used
-   separately for the @page size (see printPageSize.js), which tells the
-   browser how wide the PAPER itself is; this class controls how wide the
-   PRINTED CONTENT is within it, with margin: 0 auto centering the gap. */
+   These mm widths are for the ON-SCREEN PREVIEW only — they show the shop
+   roughly what the roll will look like. The @media print block further down
+   deliberately overrides them with a percentage layout, because when actually
+   printing, a fixed mm width is what caused receipts to be clipped: it only
+   lines up if the page the browser prints to is exactly the size we assumed,
+   and that's the driver's call, not ours. They're the printable widths (~48mm
+   of a 58mm roll, ~72mm of an 80mm roll — a printhead never reaches the paper
+   edge), so the preview stays honest about the usable area. */
 .print-thermal {
   padding: 4mm 3mm;
   margin: 0 auto;
@@ -81,6 +90,24 @@ body {
    clip content sized for a different width. */
 @page { margin: 0; }
 @media print {
-  .print-thermal-80 { width: 72mm; }
-  .print-thermal-58 { width: 48mm; }
+  /* Don't trust a fixed mm width when actually printing. Whether the browser
+     honours our @page size or the printer driver's own paper wins is outside
+     our control and varies by driver — and any mismatch silently clips the
+     right edge, which is exactly the bug this replaces. Filling 100% of
+     whatever page really got used cannot overflow it, whatever that page is.
+
+     The percentage padding is the printhead's unprintable margin: a thermal
+     head never reaches the paper edge (~5mm each side on a 58mm roll, ~4mm on
+     80mm — roughly 8% and 5% respectively). 8% covers both, costing 80mm rolls
+     a few mm of extra whitespace rather than risking a clip. Percentages,
+     again, so it scales with the real page instead of assuming its size. */
+  .print-thermal,
+  .print-thermal-58,
+  .print-thermal-80 {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding-left: 8% !important;
+    padding-right: 8% !important;
+  }
 }
