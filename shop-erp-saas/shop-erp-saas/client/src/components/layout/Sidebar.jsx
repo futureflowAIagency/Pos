@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Package, ShoppingCart, Users, UserCog,
   Wallet, CreditCard, Settings, ScrollText, ShieldCheck, X,
   Truck, ShieldQuestion, CalendarClock, Wrench, Megaphone, Contact2, Undo2, FileSpreadsheet, Store, RefreshCw, ReceiptText,
+  ChevronDown, PackageCheck,
 } from 'lucide-react';
 import api from '../../api/axios.js';
 import { fmtDateTime } from '../../utils/format.js';
@@ -70,12 +71,17 @@ const mobileLinks = [
 export default function Sidebar({ open, onClose }) {
   const { user, business, activeBranch, branches } = useAuth();
   const { t } = useLang();
+  const { pathname } = useLocation();
   const isAdmin = user?.role === 'superadmin';
   const isMobile = business?.type === 'mobile';
   // Branch management is an owner-level business-structure decision (matches
   // the server's branchRoutes.js gate), not a per-module staff permission.
   const canManageBranches = ['owner', 'superadmin'].includes(user?.role);
   const { current, updateAvailable } = useAppVersion();
+  // Branches expands into its own two tools; keep it open while you're on either.
+  const inBranchSection = ['/branches', '/stock-transfer'].includes(pathname);
+  const [branchOpen, setBranchOpen] = useState(inBranchSection);
+  useEffect(() => { if (inBranchSection) setBranchOpen(true); }, [inBranchSection]);
 
   // insert mobile module links right after "Suppliers" for mobile shops
   let ownerLinks = isMobile
@@ -118,9 +124,29 @@ export default function Sidebar({ open, onClose }) {
                 </NavLink>
               ))}
               {canManageBranches && (
-                <NavLink to="/branches" className={navClass} onClick={onClose}>
-                  <Store size={18} /> {t('Branches')}
-                </NavLink>
+                <div>
+                  <button
+                    onClick={() => setBranchOpen((o) => !o)}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
+                      inBranchSection
+                        ? 'text-brand-600 dark:text-brand-400'
+                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <Store size={18} /> {t('Branches')}
+                    <ChevronDown size={15} className={`ml-auto transition-transform ${branchOpen ? '' : '-rotate-90'}`} />
+                  </button>
+                  {branchOpen && (
+                    <div className="ml-4 pl-3 border-l border-slate-200 dark:border-slate-700 space-y-1 mt-1">
+                      <NavLink to="/branches" className={navClass} onClick={onClose}>
+                        <Store size={16} /> {t('All Branches')}
+                      </NavLink>
+                      <NavLink to="/stock-transfer" className={navClass} onClick={onClose}>
+                        <PackageCheck size={16} /> {t('Stock Transfer')}
+                      </NavLink>
+                    </div>
+                  )}
+                </div>
               )}
             </>
           )}

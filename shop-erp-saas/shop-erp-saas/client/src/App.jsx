@@ -12,6 +12,7 @@ import InvoiceSearch from './pages/InvoiceSearch.jsx';
 import Customers from './pages/Customers.jsx';
 import Suppliers from './pages/Suppliers.jsx';
 import Branches from './pages/Branches.jsx';
+import StockTransfer from './pages/StockTransfer.jsx';
 import Employees from './pages/Employees.jsx';
 import Finance from './pages/Finance.jsx';
 import Returns from './pages/Returns.jsx';
@@ -44,6 +45,7 @@ export default function App() {
         <Route path="/customers" element={<Customers />} />
         <Route path="/suppliers" element={<Suppliers />} />
         <Route path="/branches" element={<Branches />} />
+        <Route path="/stock-transfer" element={<StockTransfer />} />
         <Route path="/employees" element={<Employees />} />
         <Route path="/finance" element={<Finance />} />
         <Route path="/returns" element={<Returns />} />
