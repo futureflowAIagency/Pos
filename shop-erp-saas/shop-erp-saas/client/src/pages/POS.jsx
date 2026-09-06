@@ -36,11 +36,21 @@ export default function POS() {
   // has no barcode/unit-tracking system.
   const supportsUnits = business?.type !== 'pharmacy';
   const heldKey = `pos_holds_${business?._id || business?.id || 'default'}`;
+  const soldByKey = `pos_soldby_${business?._id || business?.id || 'default'}`;
 
   const [products, setProducts] = useState([]);
   const [unitResults, setUnitResults] = useState([]); // unique-unit code matches
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState([]);
+  // Who's actually running the register right now — often several employees
+  // share one POS login on the same till, so this is typed separately from
+  // whoever is logged in. Persisted per business (like held carts) and
+  // deliberately NOT cleared by resetSale — one employee rings up many sales
+  // in a row without retyping their name each time; only changes when someone
+  // else takes over the counter.
+  const [soldByName, setSoldByName] = useState('');
+  useEffect(() => { setSoldByName(localStorage.getItem(soldByKey) || ''); }, [soldByKey]);
+  const setSoldBy = (v) => { setSoldByName(v); try { localStorage.setItem(soldByKey, v); } catch { /* ignore quota */ } };
   // customer (walk-in removed — phone + name are required, matched to a record)
   const [custPhone, setCustPhone] = useState('');
   const [custName, setCustName] = useState('');
@@ -437,6 +447,7 @@ export default function POS() {
         customerName: custName.trim(),
         customerPhone: custPhone.trim(),
         customerAddress: custAddress.trim(),
+        soldByName: soldByName.trim(),
         customerNid: isMobile ? customerNid : '',
       });
       setLastSale(data.data.sale);
@@ -611,6 +622,15 @@ export default function POS() {
         </div>
 
         <div className="border-t border-slate-200 dark:border-slate-700 mt-3 pt-3 space-y-2 text-sm">
+          <div>
+            <label className="label">Sold By (Employee)</label>
+            <input
+              className="input"
+              value={soldByName}
+              onChange={(e) => setSoldBy(e.target.value)}
+              placeholder="Type your name — stays filled in until changed"
+            />
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <div className="relative">
               <label className="label">Customer Phone (optional)</label>

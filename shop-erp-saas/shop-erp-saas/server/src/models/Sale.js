@@ -78,6 +78,11 @@ const saleSchema = new mongoose.Schema(
     moneyBackReturned: { type: Number, default: 0 },
     moneyBacks: { type: [moneyBackSchema], default: [] },
     soldBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    // The employee who actually rang this sale up, typed at the counter — often
+    // different from `soldBy` (the login account), since several employees
+    // commonly share one POS login on the same till. Drives "Sell by" on the
+    // printed invoice; falls back to the login's own name when left blank.
+    soldByName: { type: String, trim: true, default: '' },
     // true once every line item has been fully returned (req 14)
     returned: { type: Boolean, default: false },
   },

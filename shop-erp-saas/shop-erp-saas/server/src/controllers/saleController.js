@@ -29,11 +29,11 @@ const genInvoiceNo = () =>
   'INV-' + Date.now().toString().slice(-8) + '-' + Math.floor(Math.random() * 90 + 10);
 
 // @route POST /api/sales  (POS checkout)
-// body: { items:[{product, qty, unit?}], discount, paid, paymentMethod, payments?:[{method,amount}], customer, customerName, customerPhone, customerNid, customerAddress }
+// body: { items:[{product, qty, unit?}], discount, paid, paymentMethod, payments?:[{method,amount}], customer, customerName, customerPhone, customerNid, customerAddress, soldByName }
 // `payments` (split/multi-tender) takes precedence when provided; otherwise a single
 // tender is synthesized from paymentMethod+paid (back-compat with older clients).
 export const createSale = asyncHandler(async (req, res) => {
-  const { items = [], discount = 0, paid = 0, paymentMethod = 'cash', payments: reqPayments = null, customer = null, customerName: reqName = '', customerPhone = '', customerNid = '', customerAddress = '' } = req.body;
+  const { items = [], discount = 0, paid = 0, paymentMethod = 'cash', payments: reqPayments = null, customer = null, customerName: reqName = '', customerPhone = '', customerNid = '', customerAddress = '', soldByName = '' } = req.body;
   if (!items.length) throw new ApiError(400, 'No items in sale');
   // Customer identity is OPTIONAL for every shop type — a counter/walk-in sale
   // needs no name or phone. The one exception is enforced below, once the due is
@@ -171,6 +171,9 @@ export const createSale = asyncHandler(async (req, res) => {
         paidVia: primaryMethod,
         payments: finalPayments,
         soldBy: req.user._id,
+        // the employee typed at the counter, if any — falls back to the login's
+        // own name so a shop that never uses this field sees no change
+        soldByName: String(soldByName || '').trim() || req.user.name,
       }], { session });
 
       // mark each sold device unit as sold + stamp warranty
