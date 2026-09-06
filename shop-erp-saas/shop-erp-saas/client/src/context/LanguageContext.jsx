@@ -21,6 +21,7 @@ const bn = {
   'Admin Panel': 'অ্যাডমিন প্যানেল', Notifications: 'নোটিফিকেশন',
   Branches: 'ব্রাঞ্চ', 'All Branches': 'সব ব্রাঞ্চ', 'Stock Transfer': 'স্টক ট্রান্সফার',
   'Check Warranty': 'ওয়ারেন্টি চেক', 'Claim Warranty': 'ওয়ারেন্টি ক্লেইম',
+  'Returns & Exchange': 'রিটার্ন ও এক্সচেঞ্জ', 'New Return / Exchange': 'নতুন রিটার্ন / এক্সচেঞ্জ',
   'Toggle theme': 'থিম পরিবর্তন', 'Toggle language': 'ভাষা পরিবর্তন', Logout: 'লগ আউট',
   'Mark all as read': 'সব পঠিত হিসেবে চিহ্নিত করুন', 'No notifications': 'কোনো নোটিফিকেশন নেই',
   'Relaunch to update': 'আপডেট করতে রিলঞ্চ করুন', 'A new version has been deployed — click to reload': 'নতুন একটা ভার্সন চালু হয়েছে — রিলোড করতে ক্লিক করুন',

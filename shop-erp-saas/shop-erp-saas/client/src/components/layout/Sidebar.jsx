@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Package, ShoppingCart, Users, UserCog,
   Wallet, CreditCard, Settings, ScrollText, ShieldCheck, X,
   Truck, ShieldQuestion, CalendarClock, Wrench, Megaphone, Contact2, Undo2, FileSpreadsheet, Store, RefreshCw, ReceiptText,
-  ChevronDown, PackageCheck, ClipboardList,
+  ChevronDown, PackageCheck, ClipboardList, History,
 } from 'lucide-react';
 import api from '../../api/axios.js';
 import { fmtDateTime } from '../../utils/format.js';
@@ -41,6 +41,9 @@ function useAppVersion() {
 // Links shown to every shop owner. Mobile-specific links are spliced in below.
 // `key` matches the module keys used by the staff permission system (server
 // config/modules.js + client constants/modules.js) so links can be filtered per-login.
+// Warranty and Returns & Exchange are NOT here — both render as their own
+// two-item sub-menus (like Branches further down) since each now has two
+// separate tools, spliced in at their old flat-link position (see navItems below).
 const baseLinks = [
   { to: '/', key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/products', key: 'products', label: 'Products', icon: Package },
@@ -52,7 +55,6 @@ const baseLinks = [
   { to: '/suppliers', key: 'suppliers', label: 'Suppliers', icon: Truck },
   { to: '/employees', key: 'employees', label: 'Employees', icon: UserCog },
   { to: '/finance', key: 'finance', label: 'Finance', icon: Wallet },
-  { to: '/returns', key: 'returns', label: 'Returns & Exchange', icon: Undo2 },
   { to: '/import-export', key: 'import-export', label: 'Import / Export', icon: FileSpreadsheet },
   { to: '/marketing', key: 'marketing', label: 'Marketing', icon: Megaphone },
   { to: '/crm', key: 'crm', label: 'CRM', icon: Contact2 },
@@ -61,13 +63,31 @@ const baseLinks = [
   { to: '/settings', key: 'settings', label: 'Settings', icon: Settings },
 ];
 
-// Extra modules enabled only for Technology Management System businesses.
-// Warranty renders as its own two-item sub-menu (like Branches below) rather
-// than a flat link, since it now has two separate tools (Check / Claim).
+// Extra modules enabled only for Technology Management System businesses,
+// spliced in right after "Suppliers" (Warranty's own group goes there too).
 const mobileLinks = [
   { to: '/installments', key: 'installments', label: 'EMI / Installments', icon: CalendarClock },
   { to: '/services', key: 'services', label: 'Service / Repair', icon: Wrench },
 ];
+
+// A collapsible two-item sub-menu (Warranty, Returns & Exchange, Branches all
+// use this same shape) — stays open while on either of its own routes.
+function NavGroup({ icon: Icon, label, active, open, onToggle, children }) {
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
+          active ? 'text-coral-300' : 'text-brand-100/90 hover:bg-brand-900/70 hover:text-white'
+        }`}
+      >
+        <Icon size={18} /> {label}
+        <ChevronDown size={15} className={`ml-auto transition-transform ${open ? '' : '-rotate-90'}`} />
+      </button>
+      {open && <div className="ml-4 pl-3 border-l border-brand-800 space-y-1 mt-1">{children}</div>}
+    </div>
+  );
+}
 
 export default function Sidebar({ open, onClose }) {
   const { user, business, activeBranch, branches } = useAuth();
@@ -79,15 +99,20 @@ export default function Sidebar({ open, onClose }) {
   // the server's branchRoutes.js gate), not a per-module staff permission.
   const canManageBranches = ['owner', 'superadmin'].includes(user?.role);
   const { current, updateAvailable } = useAppVersion();
-  // Branches expands into its own two tools; keep it open while you're on either.
+
   const inBranchSection = ['/branches', '/stock-transfer'].includes(pathname);
   const [branchOpen, setBranchOpen] = useState(inBranchSection);
   useEffect(() => { if (inBranchSection) setBranchOpen(true); }, [inBranchSection]);
-  // Warranty expands into Check Warranty / Claim Warranty; same pattern as Branches.
+
   const inWarrantySection = ['/warranty', '/claim-warranty'].includes(pathname);
   const [warrantyOpen, setWarrantyOpen] = useState(inWarrantySection);
   useEffect(() => { if (inWarrantySection) setWarrantyOpen(true); }, [inWarrantySection]);
   const canSeeWarranty = isMobile && (user?.role !== 'staff' || (user.permissions || []).includes('warranty'));
+
+  const inReturnsSection = ['/returns', '/return-history'].includes(pathname);
+  const [returnsOpen, setReturnsOpen] = useState(inReturnsSection);
+  useEffect(() => { if (inReturnsSection) setReturnsOpen(true); }, [inReturnsSection]);
+  const canSeeReturns = user?.role !== 'staff' || (user.permissions || []).includes('returns');
 
   // insert mobile module links right after "Suppliers" for mobile shops
   let ownerLinks = isMobile
@@ -104,14 +129,20 @@ export default function Sidebar({ open, onClose }) {
     ownerLinks = ownerLinks.filter((l) => allowed.includes(l.key));
   }
 
-  // Warranty's sub-menu renders right where its old flat link used to sit —
-  // immediately after "Suppliers" (same spot mobileLinks are spliced in above).
-  // Falls back to the end of the list if a staff login's permissions filtered
-  // "Suppliers" itself out, rather than mis-splitting to index 0.
-  const supplierIdx = ownerLinks.findIndex((l) => l.to === '/suppliers');
-  const warrantyInsertAt = supplierIdx === -1 ? ownerLinks.length : supplierIdx + 1;
-  const linksBeforeWarranty = ownerLinks.slice(0, warrantyInsertAt);
-  const linksAfterWarranty = ownerLinks.slice(warrantyInsertAt);
+  // Build one ordered render list: flat links, with the Warranty group spliced
+  // in right after "Suppliers" and the Returns & Exchange group right after
+  // "Finance" — the exact spots their old flat links used to sit. Falls back
+  // to appending at the end if a staff login's permissions filtered that
+  // anchor link out, rather than never showing the group at all.
+  const navItems = [];
+  let placedWarranty = !canSeeWarranty, placedReturns = !canSeeReturns;
+  for (const l of ownerLinks) {
+    navItems.push({ type: 'link', ...l });
+    if (canSeeWarranty && l.to === '/suppliers') { navItems.push({ type: 'warranty' }); placedWarranty = true; }
+    if (canSeeReturns && l.to === '/finance') { navItems.push({ type: 'returns' }); placedReturns = true; }
+  }
+  if (!placedWarranty) navItems.push({ type: 'warranty' });
+  if (!placedReturns) navItems.push({ type: 'returns' });
 
   return (
     <>
@@ -136,65 +167,37 @@ export default function Sidebar({ open, onClose }) {
             <NavLink to="/admin" className={navClass}><ShieldCheck size={18} /> {t('Admin Panel')}</NavLink>
           ) : (
             <>
-              {linksBeforeWarranty.map((l) => (
-                <NavLink key={l.to} to={l.to} end={l.end} className={navClass} onClick={onClose}>
-                  <l.icon size={18} /> {t(l.label)}
-                </NavLink>
-              ))}
-              {canSeeWarranty && (
-                <div>
-                  <button
-                    onClick={() => setWarrantyOpen((o) => !o)}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
-                      inWarrantySection
-                        ? 'text-coral-300'
-                        : 'text-brand-100/90 hover:bg-brand-900/70 hover:text-white'
-                    }`}
-                  >
-                    <ShieldQuestion size={18} /> {t('Warranty')}
-                    <ChevronDown size={15} className={`ml-auto transition-transform ${warrantyOpen ? '' : '-rotate-90'}`} />
-                  </button>
-                  {warrantyOpen && (
-                    <div className="ml-4 pl-3 border-l border-brand-800 space-y-1 mt-1">
-                      <NavLink to="/warranty" className={navClass} onClick={onClose}>
-                        <ShieldQuestion size={16} /> {t('Check Warranty')}
-                      </NavLink>
-                      <NavLink to="/claim-warranty" className={navClass} onClick={onClose}>
-                        <ClipboardList size={16} /> {t('Claim Warranty')}
-                      </NavLink>
-                    </div>
-                  )}
-                </div>
-              )}
-              {linksAfterWarranty.map((l) => (
-                <NavLink key={l.to} to={l.to} end={l.end} className={navClass} onClick={onClose}>
-                  <l.icon size={18} /> {t(l.label)}
-                </NavLink>
-              ))}
+              {navItems.map((item) => {
+                if (item.type === 'link') {
+                  return (
+                    <NavLink key={item.to} to={item.to} end={item.end} className={navClass} onClick={onClose}>
+                      <item.icon size={18} /> {t(item.label)}
+                    </NavLink>
+                  );
+                }
+                if (item.type === 'warranty') {
+                  return (
+                    <NavGroup key="warranty" icon={ShieldQuestion} label={t('Warranty')} active={inWarrantySection} open={warrantyOpen} onToggle={() => setWarrantyOpen((o) => !o)}>
+                      <NavLink to="/warranty" className={navClass} onClick={onClose}><ShieldQuestion size={16} /> {t('Check Warranty')}</NavLink>
+                      <NavLink to="/claim-warranty" className={navClass} onClick={onClose}><ClipboardList size={16} /> {t('Claim Warranty')}</NavLink>
+                    </NavGroup>
+                  );
+                }
+                if (item.type === 'returns') {
+                  return (
+                    <NavGroup key="returns" icon={Undo2} label={t('Returns & Exchange')} active={inReturnsSection} open={returnsOpen} onToggle={() => setReturnsOpen((o) => !o)}>
+                      <NavLink to="/returns" end className={navClass} onClick={onClose}><Undo2 size={16} /> {t('New Return / Exchange')}</NavLink>
+                      <NavLink to="/return-history" className={navClass} onClick={onClose}><History size={16} /> {t('History')}</NavLink>
+                    </NavGroup>
+                  );
+                }
+                return null;
+              })}
               {canManageBranches && (
-                <div>
-                  <button
-                    onClick={() => setBranchOpen((o) => !o)}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
-                      inBranchSection
-                        ? 'text-coral-300'
-                        : 'text-brand-100/90 hover:bg-brand-900/70 hover:text-white'
-                    }`}
-                  >
-                    <Store size={18} /> {t('Branches')}
-                    <ChevronDown size={15} className={`ml-auto transition-transform ${branchOpen ? '' : '-rotate-90'}`} />
-                  </button>
-                  {branchOpen && (
-                    <div className="ml-4 pl-3 border-l border-brand-800 space-y-1 mt-1">
-                      <NavLink to="/branches" className={navClass} onClick={onClose}>
-                        <Store size={16} /> {t('All Branches')}
-                      </NavLink>
-                      <NavLink to="/stock-transfer" className={navClass} onClick={onClose}>
-                        <PackageCheck size={16} /> {t('Stock Transfer')}
-                      </NavLink>
-                    </div>
-                  )}
-                </div>
+                <NavGroup icon={Store} label={t('Branches')} active={inBranchSection} open={branchOpen} onToggle={() => setBranchOpen((o) => !o)}>
+                  <NavLink to="/branches" className={navClass} onClick={onClose}><Store size={16} /> {t('All Branches')}</NavLink>
+                  <NavLink to="/stock-transfer" className={navClass} onClick={onClose}><PackageCheck size={16} /> {t('Stock Transfer')}</NavLink>
+                </NavGroup>
               )}
             </>
           )}

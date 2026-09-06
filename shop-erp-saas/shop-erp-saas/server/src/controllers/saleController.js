@@ -211,17 +211,29 @@ export const createSale = asyncHandler(async (req, res) => {
   created(res, { sale });
 });
 
-// @route GET /api/sales?from=&to=
+// @route GET /api/sales?from=&to=&page=&pageSize=
+// Plain paginated invoice listing — every sale in this branch, newest first,
+// optionally date-filtered. Powers the Returns & Exchange "New Return /
+// Exchange" tab's full browsable order list (client asked for every sold
+// invoice reachable there, not just Dashboard's 6 "Recent Orders").
 export const getSales = asyncHandler(async (req, res) => {
-  const { from, to, limit = 100 } = req.query;
+  const { from, to, page = 1 } = req.query;
   const q = branchFilter(req);
   if (from || to) {
     q.createdAt = {};
     if (from) q.createdAt.$gte = new Date(from);
     if (to) q.createdAt.$lte = new Date(to + 'T23:59:59');
   }
-  const sales = await Sale.find(q).sort('-createdAt').limit(Number(limit));
-  ok(res, { sales, count: sales.length });
+  const pg = Math.max(1, Number(page) || 1);
+  // `limit` stays supported (unpaginated callers, if any, get their old
+  // one-shot behaviour) but pageSize is capped — this list can genuinely
+  // hold thousands of rows for a busy shop.
+  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || Number(req.query.limit) || 20));
+  const [sales, total] = await Promise.all([
+    Sale.find(q).sort('-createdAt').skip((pg - 1) * pageSize).limit(pageSize).populate('customer', 'name phone'),
+    Sale.countDocuments(q),
+  ]);
+  ok(res, { sales, count: sales.length, total, page: pg, pageSize });
 });
 
 // @route GET /api/sales/search?q=  — Invoice Search: find an invoice by its

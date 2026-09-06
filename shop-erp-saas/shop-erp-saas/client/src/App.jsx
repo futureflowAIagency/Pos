@@ -16,6 +16,7 @@ import StockTransfer from './pages/StockTransfer.jsx';
 import Employees from './pages/Employees.jsx';
 import Finance from './pages/Finance.jsx';
 import Returns from './pages/Returns.jsx';
+import ReturnHistory from './pages/ReturnHistory.jsx';
 import ImportExport from './pages/ImportExport.jsx';
 import Subscription from './pages/Subscription.jsx';
 import Settings from './pages/Settings.jsx';
@@ -50,6 +51,7 @@ export default function App() {
         <Route path="/employees" element={<Employees />} />
         <Route path="/finance" element={<Finance />} />
         <Route path="/returns" element={<Returns />} />
+        <Route path="/return-history" element={<ReturnHistory />} />
         <Route path="/import-export" element={<ImportExport />} />
         <Route path="/subscription" element={<Subscription />} />
         <Route path="/settings" element={<Settings />} />

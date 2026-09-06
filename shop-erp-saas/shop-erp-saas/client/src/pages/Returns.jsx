@@ -7,54 +7,46 @@ import OrderDetailsModal from '../components/OrderDetailsModal.jsx';
 import { taka, fmtDateTime } from '../utils/format.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
+const PAGE_SIZE = 20;
+
+// New Return / Exchange — every sold invoice this shop has, not just
+// Dashboard's 6 "Recent Orders": browse all of them (paginated, newest
+// first), or narrow down instantly by invoice number, customer name/phone,
+// or a date range. Click a row to open its full invoice — reprint, collect
+// due, or start the actual Return/Exchange from there.
 export default function Returns() {
-  const [tab, setTab] = useState('new'); // 'new' | 'history'
-  return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold flex items-center gap-2"><Undo2 size={24} /> Returns &amp; Exchange</h1>
-      <div className="flex gap-2 border-b border-slate-200 dark:border-slate-700">
-        <TabButton active={tab === 'new'} onClick={() => setTab('new')}>New Return / Exchange</TabButton>
-        <TabButton active={tab === 'history'} onClick={() => setTab('history')}>History</TabButton>
-      </div>
-      {tab === 'new' ? <NewReturnExchange /> : <ReturnHistory />}
-    </div>
-  );
-}
-
-const TabButton = ({ active, onClick, children }) => (
-  <button
-    onClick={onClick}
-    className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
-      active ? 'border-brand-600 text-brand-600' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-    }`}
-  >
-    {children}
-  </button>
-);
-
-// ---------------------------------------------------------------------------
-// Tab 1: New Return / Exchange — find the sale by invoice number or customer
-// phone/name (same lookup Invoice Search uses), then open it — the actual
-// Return/Exchange button lives inside that invoice's own details modal.
-// ---------------------------------------------------------------------------
-function NewReturnExchange() {
   const { branches } = useAuth();
   const [q, setQ] = useState('');
-  const [rows, setRows] = useState(null); // null = nothing searched yet
-  const [loading, setLoading] = useState(false);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState(null);
 
-  const run = async () => {
-    const term = q.trim();
-    if (term.length < 2) return toast.error('Type at least 2 characters');
+  const isSearching = q.trim().length >= 2;
+
+  const load = async () => {
     setLoading(true);
     try {
-      const { data } = await api.get('/sales/search', { params: { q: term } });
-      setRows(data.data.sales);
-      if (!data.data.sales.length) toast('No invoice found for that', { icon: '🔍' });
-    } catch (e) { toast.error(e.response?.data?.message || 'Search failed'); }
+      if (isSearching) {
+        // Quick find by invoice/name/phone — business-wide, top 30 matches.
+        const { data } = await api.get('/sales/search', { params: { q: q.trim() } });
+        setRows(data.data.sales); setTotal(data.data.sales.length);
+      } else {
+        // Browse everything, paginated — respects the date filter if set.
+        const { data } = await api.get('/sales', { params: { page, pageSize: PAGE_SIZE, from: dateFrom || undefined, to: dateTo || undefined } });
+        setRows(data.data.sales); setTotal(data.data.total);
+      }
+    } catch (e) { toast.error(e.response?.data?.message || 'Failed to load orders'); }
     setLoading(false);
   };
+  useEffect(() => { const t = setTimeout(load, 300); return () => clearTimeout(t); }, [q, dateFrom, dateTo, page]);
+  // typing a new search or changing the date range should always land back on page 1
+  useEffect(() => { setPage(1); }, [q, dateFrom, dateTo]);
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const columns = [
     { key: 'invoiceNo', label: 'Invoice', render: (r) => (
@@ -79,10 +71,15 @@ function NewReturnExchange() {
       </div>
     ) },
     { key: 'total', label: 'Total', className: 'text-right', render: (r) => taka(r.total) },
+    { key: 'due', label: 'Due', className: 'text-right', render: (r) => (
+      r.due > 0 ? <span className="text-red-500 font-semibold">{taka(r.due)}</span> : <span className="text-green-600">Paid</span>
+    ) },
   ];
 
   return (
-    <div className="space-y-4 pt-4">
+    <div className="space-y-4">
+      <h1 className="text-2xl font-bold flex items-center gap-2"><Undo2 size={24} /> New Return / Exchange</h1>
+
       <div className="card p-4 space-y-2">
         <div className="flex flex-col sm:flex-row gap-2">
           <div className="relative flex-1">
@@ -93,75 +90,31 @@ function NewReturnExchange() {
               placeholder="Invoice number, customer name or phone…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') run(); }}
             />
           </div>
-          <button className="btn-primary sm:w-32" disabled={loading} onClick={run}>
-            {loading ? 'Searching…' : 'Search'}
-          </button>
+          <input type="date" className="input sm:w-auto" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} title="From date" disabled={isSearching} />
+          <input type="date" className="input sm:w-auto" value={dateTo} onChange={(e) => setDateTo(e.target.value)} title="To date" disabled={isSearching} />
         </div>
-        <p className="text-xs text-slate-400">Find the sale by its invoice number or the customer's phone number, then open it to return or exchange an item.</p>
+        <p className="text-xs text-slate-400">
+          {isSearching
+            ? 'Searching by invoice/name/phone across every branch.'
+            : 'Every invoice this branch has sold, newest first — search or pick a date range to narrow it down. Click an order to reprint it, collect a due, or start a return/exchange.'}
+        </p>
       </div>
 
-      {rows !== null && (
-        <>
-          <p className="text-xs font-semibold text-slate-400">
-            {rows.length} invoice{rows.length === 1 ? '' : 's'} found for "{q.trim()}"{rows.length === 30 ? ' (showing the 30 most recent)' : ''}
-          </p>
-          <DataTable columns={columns} rows={rows} onRowClick={(r) => setOpenId(r._id)} empty="No invoice matches that — it is not in our records." />
-        </>
+      <DataTable columns={columns} rows={rows} onRowClick={(r) => setOpenId(r._id)} empty={loading ? 'Loading…' : 'No orders found'} />
+
+      {!isSearching && total > PAGE_SIZE && (
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-slate-400">{total} order(s) total — page {page} of {totalPages}</span>
+          <div className="flex gap-2">
+            <button className="btn-ghost" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Prev</button>
+            <button className="btn-ghost" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</button>
+          </div>
+        </div>
       )}
 
-      {openId && <OrderDetailsModal saleId={openId} onClose={() => setOpenId(null)} onChanged={run} />}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Tab 2: History — permanent audit trail of every return & exchange (req 14).
-// ---------------------------------------------------------------------------
-function ReturnHistory() {
-  const [returns, setReturns] = useState([]);
-
-  useEffect(() => {
-    api.get('/returns').then(({ data }) => setReturns(data.data.returns));
-  }, []);
-
-  return (
-    <div className="pt-4">
-      <DataTable
-        columns={[
-          { key: 'createdAt', label: 'Date', render: (r) => fmtDateTime(r.createdAt) },
-          { key: 'invoiceNo', label: 'Invoice' },
-          { key: 'customerName', label: 'Customer', render: (r) => r.customerName || '—' },
-          { key: 'type', label: 'Type', render: (r) => (
-            <span className={`badge ${r.type === 'exchange' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>{r.type}</span>
-          ) },
-          { key: 'items', label: 'Items', render: (r) => (
-            <div className="text-xs">
-              {r.items.map((it, i) => (
-                <div key={i}>{it.name} × {it.qty} <span className="text-slate-400">({it.condition})</span></div>
-              ))}
-            </div>
-          ) },
-          { key: 'reason', label: 'Reason', render: (r) => r.reason || '—' },
-          { key: 'returnValue', label: 'Return Value', className: 'text-right', render: (r) => taka(r.returnValue) },
-          { key: 'settlement', label: 'Settlement', className: 'text-right', render: (r) => (
-            <div className="text-xs">
-              {r.dueReduction > 0 && <div>Due cleared: {taka(r.dueReduction)}</div>}
-              {r.cashRefund > 0 && <div className="text-red-500">Refunded ({r.refundMethod}): {taka(r.cashRefund)}</div>}
-              {r.storeCreditIssued > 0 && <div className="text-green-600">Store credit: {taka(r.storeCreditIssued)}</div>}
-              {r.type === 'exchange' && (
-                <div className={r.priceDiff > 0 ? 'text-red-500' : r.priceDiff < 0 ? 'text-green-600' : ''}>
-                  {r.priceDiff > 0 ? `Customer paid ${taka(r.priceDiff)}` : r.priceDiff < 0 ? `Diff settled ${taka(-r.priceDiff)}` : 'Even exchange'}
-                </div>
-              )}
-            </div>
-          ) },
-        ]}
-        rows={returns}
-        empty="No returns or exchanges yet"
-      />
+      {openId && <OrderDetailsModal saleId={openId} onClose={() => setOpenId(null)} onChanged={load} />}
     </div>
   );
 }
