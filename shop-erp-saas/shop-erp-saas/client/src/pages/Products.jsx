@@ -7,6 +7,7 @@ import Modal from '../components/ui/Modal.jsx';
 import LabelPrintModal from '../components/print/LabelPrintModal.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import StockReport from '../components/print/StockReport.jsx';
+import StockReportByBrand from '../components/print/StockReportByBrand.jsx';
 import { taka, fmtDate, expiryStatus, daysUntil } from '../utils/format.js';
 import { useConfirm } from '../context/ConfirmContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -63,6 +64,12 @@ export default function Products() {
   const [stockReport, setStockReport] = useState(null); // { category, groups }
   const [stockReportOpen, setStockReportOpen] = useState(false);
   const [stockReportLoading, setStockReportLoading] = useState(false);
+  // Stock Print by Brands — same idea, but grouped purely by brand (no
+  // supplier at all) with a running SL# per brand group, plus a day-over-day
+  // total-stock comparison at the bottom.
+  const [brandReport, setBrandReport] = useState(null); // { category, groups, today, lastDay }
+  const [brandReportOpen, setBrandReportOpen] = useState(false);
+  const [brandReportLoading, setBrandReportLoading] = useState(false);
 
   const load = async () => {
     const { data } = await api.get('/products', { params: { search, category: categoryFilter || undefined } });
@@ -123,6 +130,32 @@ export default function Products() {
       setStockReportOpen(true);
     } catch (e) { toast.error(e.response?.data?.message || 'Failed to build stock report'); }
     setStockReportLoading(false);
+  };
+
+  // One click: every in-stock product (for the currently selected category, or
+  // all of them), grouped purely by BRAND — no supplier at all — with a
+  // running SL# per brand, plus today's total stock vs the last time this
+  // report was printed on an earlier day.
+  const openBrandReport = async () => {
+    setBrandReportLoading(true);
+    try {
+      const [{ data }, { data: snap }] = await Promise.all([
+        api.get('/products', { params: { category: categoryFilter || undefined } }),
+        api.get('/products/stock-snapshot', { params: { category: categoryFilter || undefined } }),
+      ]);
+      const inStock = data.data.products.filter((p) => p.stock > 0);
+      const byBrand = {};
+      for (const p of inStock) {
+        const key = p.brand?.trim() || '— No Brand —';
+        (byBrand[key] ||= []).push(p);
+      }
+      const groups = Object.entries(byBrand)
+        .map(([brand, items]) => ({ brand, items, qty: items.reduce((s, i) => s + i.stock, 0) }))
+        .sort((a, b) => b.qty - a.qty);
+      setBrandReport({ category: categoryFilter, groups, today: snap.data.today, lastDay: snap.data.lastDay });
+      setBrandReportOpen(true);
+    } catch (e) { toast.error(e.response?.data?.message || 'Failed to build stock report'); }
+    setBrandReportLoading(false);
   };
 
   // Scan/enter a barcode: if it matches an existing product, don't create a new
@@ -308,6 +341,7 @@ export default function Products() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Products</h1>
         <div className="flex gap-2 flex-wrap">
+          <button className="btn-ghost" disabled={brandReportLoading} onClick={openBrandReport}><Printer size={18} /> Stock Print by Brands</button>
           <button className="btn-ghost" disabled={stockReportLoading} onClick={openStockReport}><Printer size={18} /> Stock Print</button>
           <button className="btn-primary" onClick={openNew}><Plus size={18} /> Add Product</button>
         </div>
@@ -514,6 +548,18 @@ export default function Products() {
 
       <PrintWrapper open={stockReportOpen} onClose={() => setStockReportOpen(false)} title="Stock Report">
         {stockReport && <StockReport business={business} category={stockReport.category} groups={stockReport.groups} />}
+      </PrintWrapper>
+
+      <PrintWrapper open={brandReportOpen} onClose={() => setBrandReportOpen(false)} title="Stock Report by Brand">
+        {brandReport && (
+          <StockReportByBrand
+            business={business}
+            category={brandReport.category}
+            groups={brandReport.groups}
+            today={brandReport.today}
+            lastDay={brandReport.lastDay}
+          />
+        )}
       </PrintWrapper>
     </div>
   );

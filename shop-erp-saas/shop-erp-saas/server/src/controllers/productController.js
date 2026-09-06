@@ -7,6 +7,7 @@ import Product from '../models/Product.js';
 import PhoneUnit from '../models/PhoneUnit.js';
 import Supplier from '../models/Supplier.js';
 import Purchase from '../models/Purchase.js';
+import StockSnapshot from '../models/StockSnapshot.js';
 
 const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -257,4 +258,43 @@ export const deleteProduct = asyncHandler(async (req, res) => {
   if (!product) throw new ApiError(404, 'Product not found');
   await logActivity(req, { action: 'DELETE_PRODUCT', entity: 'Product', entityId: product._id });
   ok(res, {}, 'Product deleted');
+});
+
+// local calendar day (server time — same convention dashboardController's
+// 'daily' period already uses) as a stable 'YYYY-MM-DD' key
+const dayKey = (d = new Date()) => {
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+// @route GET /api/products/stock-snapshot?category=
+// Records today's in-stock totals (for the "Stock Print by Brands" report,
+// scoped the same way — same category filter, if any) and returns the most
+// recent PRIOR day's totals alongside it, so the report can show a
+// day-over-day comparison. Re-calling this on the same day just updates
+// today's own reading rather than creating a second one.
+export const getStockSnapshot = asyncHandler(async (req, res) => {
+  const category = req.query.category || '';
+  const q = branchFilter(req, { isActive: true, stock: { $gt: 0 } });
+  if (category) q.category = category;
+
+  const inStock = await Product.find(q).select('stock');
+  const totalProducts = inStock.length;
+  const totalQty = inStock.reduce((s, p) => s + (p.stock || 0), 0);
+  const today = dayKey();
+
+  await StockSnapshot.findOneAndUpdate(
+    { business: req.businessId, branch: req.branchId, category, date: today },
+    { totalProducts, totalQty },
+    { upsert: true, setDefaultsOnInsert: true }
+  );
+
+  const lastDay = await StockSnapshot.findOne({
+    business: req.businessId, branch: req.branchId, category, date: { $lt: today },
+  }).sort('-date');
+
+  ok(res, {
+    today: { date: today, totalProducts, totalQty },
+    lastDay: lastDay ? { date: lastDay.date, totalProducts: lastDay.totalProducts, totalQty: lastDay.totalQty } : null,
+  });
 });
