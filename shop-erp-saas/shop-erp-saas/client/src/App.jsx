@@ -21,6 +21,7 @@ import Subscription from './pages/Subscription.jsx';
 import Settings from './pages/Settings.jsx';
 import ActivityLogs from './pages/ActivityLogs.jsx';
 import Warranty from './pages/Warranty.jsx';
+import ClaimWarranty from './pages/ClaimWarranty.jsx';
 import Installments from './pages/Installments.jsx';
 import Services from './pages/Services.jsx';
 import Marketing from './pages/Marketing.jsx';
@@ -54,6 +55,7 @@ export default function App() {
         <Route path="/settings" element={<Settings />} />
         <Route path="/activity" element={<ActivityLogs />} />
         <Route path="/warranty" element={<Warranty />} />
+        <Route path="/claim-warranty" element={<ClaimWarranty />} />
         <Route path="/installments" element={<Installments />} />
         <Route path="/services" element={<Services />} />
         <Route path="/marketing" element={<Marketing />} />
