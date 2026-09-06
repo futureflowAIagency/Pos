@@ -288,7 +288,12 @@ function ClaimWarranty() {
         columns={[
           { key: 'claimNo', label: 'Claim No' },
           { key: 'customerName', label: 'Customer', render: (r) => (
-            <div><span className="font-medium">{r.customerName}</span>{r.customerPhone && <div className="text-xs text-slate-400">{r.customerPhone}</div>}</div>
+            <div>
+              <span className="font-medium">{r.customerName}</span>
+              {r.customerPhone && <div className="text-xs text-slate-400">{r.customerPhone}</div>}
+              {r.customerNid && <div className="text-xs text-slate-400">NID: <span className="font-mono">{r.customerNid}</span></div>}
+              {r.customerAddress && <div className="text-xs text-slate-400 truncate max-w-[180px]" title={r.customerAddress}>{r.customerAddress}</div>}
+            </div>
           ) },
           { key: 'productName', label: 'Product', render: (r) => (
             <div>{r.productName}{(r.imei1 || r.serial) && <div className="text-xs text-slate-400">{r.imei1 || r.serial}</div>}</div>

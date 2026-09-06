@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
@@ -60,8 +61,12 @@ export const lookupForClaim = asyncHandler(async (req, res) => {
 // Counts by status — independent of whatever search/status filter the claims
 // list itself is currently showing, so the dashboard always reflects the truth.
 export const getClaimsSummary = asyncHandler(async (req, res) => {
+  // $match in an aggregation pipeline does NOT get Mongoose's automatic
+  // string->ObjectId query casting the way .find()/.findOne() do — branchFilter's
+  // plain string ids would silently match nothing here, so cast explicitly
+  // (same fix balanceService.js already applies for its own aggregations).
   const rows = await WarrantyClaim.aggregate([
-    { $match: branchFilter(req) },
+    { $match: { business: new mongoose.Types.ObjectId(req.businessId), branch: new mongoose.Types.ObjectId(req.branchId) } },
     { $group: { _id: '$status', count: { $sum: 1 } } },
   ]);
   const counts = Object.fromEntries(WARRANTY_CLAIM_STATUSES.map((s) => [s, 0]));
