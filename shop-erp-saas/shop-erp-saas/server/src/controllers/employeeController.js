@@ -190,11 +190,26 @@ export const deleteEmployee = asyncHandler(async (req, res) => {
 // supports partial payments (e.g. pay 10,000 of a 20,000 salary now, settle the
 // rest later via another call for the same month).
 // body: { month, totalAmount?, amount, source='cash' }
+const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
+
+// @route POST /api/employees/:id/salary
+// body: { month, totalAmount, type:'salary'|'advance', payments:[{method,amount}] }
+// `payments` (split/multi-tender, e.g. part cash + part bkash in one payment) takes
+// precedence when provided; otherwise a single tender is read from the legacy
+// {amount, source} shape — same back-compat pattern as Sale.payments (Phase 11).
 export const paySalary = asyncHandler(async (req, res) => {
-  const { month, totalAmount, amount, source = 'cash' } = req.body;
+  const { month, totalAmount, type = 'salary' } = req.body;
   if (!month) throw new ApiError(400, 'Month is required');
-  const pay = Number(amount);
-  if (!pay || pay <= 0) throw new ApiError(400, 'Enter a valid payment amount');
+  if (!['salary', 'advance'].includes(type)) throw new ApiError(400, 'Invalid payment type');
+
+  const rawTenders = Array.isArray(req.body.payments) && req.body.payments.length
+    ? req.body.payments
+    : [{ method: req.body.source || 'cash', amount: req.body.amount }];
+  const tenders = rawTenders
+    .map((p) => ({ method: TENDERS.includes(p.method) ? p.method : 'cash', amount: Number(p.amount) || 0 }))
+    .filter((p) => p.amount > 0);
+  const pay = tenders.reduce((s, p) => s + p.amount, 0);
+  if (!pay) throw new ApiError(400, 'Enter a valid payment amount');
 
   const employee = await Employee.findOne(tenantFilter(req, { _id: req.params.id }));
   if (!employee) throw new ApiError(404, 'Employee not found');
@@ -210,26 +225,40 @@ export const paySalary = asyncHandler(async (req, res) => {
 
   const due = Math.max(0, entry.amount - entry.paidAmount);
   if (due <= 0) throw new ApiError(400, 'This month\'s salary is already fully paid');
-  const applied = Math.min(pay, due);
-  const method = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'].includes(source) ? source : 'cash';
+  if (pay > due) throw new ApiError(400, `That's more than the remaining due (${due})`);
 
-  entry.payments.push({ amount: applied, method, date: new Date() });
-  entry.paidAmount += applied;
+  entry.payments.push({
+    amount: pay,
+    method: tenders[0].method, // legacy/display field — first tender used
+    tenders: tenders.length > 1 ? tenders : [],
+    type,
+    date: new Date(),
+  });
+  entry.paidAmount += pay;
   entry.status = entry.paidAmount >= entry.amount ? 'paid' : entry.paidAmount > 0 ? 'partial' : 'due';
   entry.paidAt = entry.status === 'paid' ? new Date() : entry.paidAt;
 
   await employee.save();
 
-  // Every payment is a real, discrete money movement — book its own Expense.
-  await Expense.create({
-    business: req.businessId,
-    title: `Salary — ${employee.name} (${month})`,
-    category: 'Salary',
-    amount: applied,
-    source: method,
-    note: `Employee ${employee.employeeId}${entry.status === 'partial' ? ' (partial)' : ''}`,
-  });
+  // Every payment is a real, discrete money movement — book one Expense per
+  // tender (so the balance engine attributes each method correctly). `branch`
+  // is required on Expense (Phase 25) — this used to be missing here entirely,
+  // which threw a validation error AFTER the employee record above had already
+  // saved: the paid amount looked right, but the request still came back as a
+  // failure. resolveBranch is now chained in employeeRoutes.js for this reason.
+  const label = type === 'advance' ? 'Salary Advance' : 'Salary';
+  for (const t of tenders) {
+    await Expense.create({
+      business: req.businessId,
+      branch: req.branchId,
+      title: `${label} — ${employee.name} (${month})`,
+      category: 'Salary',
+      amount: t.amount,
+      source: t.method,
+      note: `Employee ${employee.employeeId}${entry.status === 'partial' ? ' (partial)' : ''}${tenders.length > 1 ? ' — split payment' : ''}`,
+    });
+  }
 
-  await logActivity(req, { action: 'PAY_SALARY', entity: 'Employee', entityId: employee._id, meta: { month, amount: applied, status: entry.status } });
+  await logActivity(req, { action: 'PAY_SALARY', entity: 'Employee', entityId: employee._id, meta: { month, amount: pay, type, status: entry.status } });
   ok(res, { employee }, 'Salary payment recorded');
 });

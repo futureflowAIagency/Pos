@@ -1,12 +1,15 @@
 import { Router } from 'express';
 import { getEmployees, getEmployee, createEmployee, updateEmployee, setEmployeeStatus, deleteEmployee, paySalary, resetEmployeePassword } from '../controllers/employeeController.js';
 import { protect } from '../middleware/auth.js';
-import { requireBusiness } from '../middleware/tenant.js';
+import { requireBusiness, resolveBranch } from '../middleware/tenant.js';
 import { authorize } from '../middleware/role.js';
 import { requireModule } from '../middleware/permissions.js';
 
 const router = Router();
-router.use(protect, requireBusiness, requireModule('employees'));
+// Employee itself stays business-wide (shared across branches, per Phase 25) —
+// resolveBranch is chained anyway because paySalary books an Expense, which IS
+// branch-scoped and required. Every other handler here simply ignores req.branchId.
+router.use(protect, requireBusiness, resolveBranch, requireModule('employees'));
 
 // Only the shop owner (or platform superadmin) may manage employees.
 const ownerOnly = authorize('owner', 'superadmin');

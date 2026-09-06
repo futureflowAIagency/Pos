@@ -4,11 +4,13 @@ export default function SalarySlip({ employee, record, business }) {
   if (!employee || !record) return null;
   const lastPayment = record.payments?.[record.payments.length - 1];
   const due = Math.max(0, (record.amount || 0) - (record.paidAmount || 0));
+  const isAdvance = lastPayment?.type === 'advance';
+  const tenders = lastPayment?.tenders?.length ? lastPayment.tenders : (lastPayment ? [{ method: lastPayment.method, amount: lastPayment.amount }] : []);
   return (
     <div className="print-a4" style={{ minHeight: 'auto' }}>
       <div style={{ textAlign: 'center', borderBottom: '2px solid #000', paddingBottom: 10 }}>
         <h1 style={{ margin: 0 }}>{business?.name}</h1>
-        <h2 style={{ margin: '6px 0' }}>SALARY SLIP</h2>
+        <h2 style={{ margin: '6px 0' }}>{isAdvance ? 'SALARY ADVANCE RECEIPT' : 'SALARY SLIP'}</h2>
         <p style={{ margin: 0 }}>Month: {record.month}</p>
       </div>
       <table style={{ width: '100%', marginTop: 16, borderCollapse: 'collapse' }}>
@@ -18,8 +20,14 @@ export default function SalarySlip({ employee, record, business }) {
           <Tr l="Phone" r={employee.phone || '-'} />
           <Tr l="Salary Month" r={record.month} />
           <Tr l="Total Salary" r={taka(record.amount)} />
-          {lastPayment && <Tr l="This Payment" r={`${taka(lastPayment.amount)} (${lastPayment.method})`} />}
-          <Tr l="Total Paid" r={taka(record.paidAmount ?? record.amount)} />
+          {lastPayment && <Tr l="Payment Type" r={isAdvance ? 'ADVANCE' : 'Regular Salary Payment'} />}
+          {lastPayment && <Tr l="This Payment" r={taka(lastPayment.amount)} />}
+          {tenders.length > 1 ? (
+            tenders.map((t, i) => <Tr key={i} l={`— via ${String(t.method).toUpperCase()}`} r={taka(t.amount)} />)
+          ) : (
+            lastPayment && <Tr l="Paid Via" r={String(tenders[0]?.method || '').toUpperCase()} />
+          )}
+          <Tr l="Total Paid (all payments this month)" r={taka(record.paidAmount ?? record.amount)} />
           <Tr l="Remaining Due" r={taka(due)} />
           <Tr l="Status" r={record.status.toUpperCase()} />
           <Tr l="Paid Date" r={(lastPayment?.date || record.paidAt) ? fmtDate(lastPayment?.date || record.paidAt) : '-'} />

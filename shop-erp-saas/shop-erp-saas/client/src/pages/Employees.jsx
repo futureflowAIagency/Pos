@@ -54,7 +54,10 @@ export default function Employees() {
   const [form, setForm] = useState(emptyForm);
   const [viewEmp, setViewEmp] = useState(null);
   const [salaryModal, setSalaryModal] = useState(null);
-  const [salaryForm, setSalaryForm] = useState({ month: thisMonth, totalAmount: 0, amount: '', source: 'cash' });
+  // `payments` mirrors POS's split-tender rows (Phase 11) — one or more
+  // {method, amount} lines so a single payment can be split e.g. part cash,
+  // part bkash. `type` distinguishes a scheduled salary payment from an advance.
+  const [salaryForm, setSalaryForm] = useState({ month: thisMonth, totalAmount: 0, type: 'salary', payments: [{ method: 'cash', amount: '' }] });
   const [slip, setSlip] = useState(null);
   // login access (staff dashboard account) + one-time password reveal
   const [login, setLogin] = useState(emptyLogin);
@@ -181,26 +184,36 @@ export default function Employees() {
     catch (e) { toast.error(e.response?.data?.message || 'Error'); }
   };
 
+  const emptySalaryPayments = () => ({ type: 'salary', payments: [{ method: 'cash', amount: '' }] });
+
   const openSalary = (emp) => {
     setSalaryModal(emp);
     const existing = emp.salaryHistory?.find((s) => s.month === thisMonth);
-    setSalaryForm({ month: thisMonth, totalAmount: existing?.amount ?? emp.monthlySalary, amount: '', source: 'cash' });
+    setSalaryForm({ month: thisMonth, totalAmount: existing?.amount ?? emp.monthlySalary, ...emptySalaryPayments() });
   };
   // Switching the month should reflect that month's existing record (if any), not
   // carry over the previous month's total/paid figures.
   const changeSalaryMonth = (month) => {
     const existing = salaryModal.salaryHistory?.find((s) => s.month === month);
-    setSalaryForm({ ...salaryForm, month, totalAmount: existing?.amount ?? salaryModal.monthlySalary, amount: '' });
+    setSalaryForm({ ...salaryForm, month, totalAmount: existing?.amount ?? salaryModal.monthlySalary, ...emptySalaryPayments() });
   };
   const salaryEntry = salaryModal?.salaryHistory?.find((s) => s.month === salaryForm.month);
   const salaryPaidSoFar = salaryEntry?.paidAmount || 0;
   const salaryDue = Math.max(0, Number(salaryForm.totalAmount || 0) - salaryPaidSoFar);
 
+  // ---------- split-payment rows (mirrors POS) ----------
+  const setSalaryPaymentRow = (i, k, v) => setSalaryForm((f) => ({ ...f, payments: f.payments.map((r, idx) => idx === i ? { ...r, [k]: v } : r) }));
+  const addSalaryPaymentRow = () => setSalaryForm((f) => ({ ...f, payments: [...f.payments, { method: 'cash', amount: '' }] }));
+  const removeSalaryPaymentRow = (i) => setSalaryForm((f) => ({ ...f, payments: f.payments.length > 1 ? f.payments.filter((_, idx) => idx !== i) : f.payments }));
+  const salaryPaidNow = salaryForm.payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const fillSalaryRemaining = (i) => setSalaryPaymentRow(i, 'amount', String(Math.max(0, salaryDue - (salaryPaidNow - (Number(salaryForm.payments[i]?.amount) || 0)))));
+
   const paySalary = async () => {
-    if (!(Number(salaryForm.amount) > 0)) return toast.error('Enter a valid payment amount');
+    const cleanPayments = salaryForm.payments.map((p) => ({ method: p.method, amount: Number(p.amount) || 0 })).filter((p) => p.amount > 0);
+    if (!cleanPayments.length) return toast.error('Enter a valid payment amount');
     try {
       const { data } = await api.post(`/employees/${salaryModal._id}/salary`, {
-        month: salaryForm.month, totalAmount: +salaryForm.totalAmount || 0, amount: +salaryForm.amount, source: salaryForm.source,
+        month: salaryForm.month, totalAmount: +salaryForm.totalAmount || 0, type: salaryForm.type, payments: cleanPayments,
       });
       toast.success('Salary payment recorded');
       const rec = data.data.employee.salaryHistory.find((s) => s.month === salaryForm.month);
@@ -412,19 +425,52 @@ export default function Employees() {
             <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-2"><p className="text-xs text-slate-400">Due</p><p className="font-semibold text-red-500">{taka(salaryDue)}</p></div>
           </div>
           <div>
-            <div className="flex items-center justify-between">
-              <label className="label mb-0">Amount to Pay Now</label>
-              <button type="button" className="text-xs text-brand-600" onClick={() => setSalaryForm({ ...salaryForm, amount: String(salaryDue) })}>Pay full due</button>
+            <label className="label">Payment Type</label>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setSalaryForm({ ...salaryForm, type: 'salary' })}
+                className={`flex-1 py-2 rounded-lg text-sm font-medium border transition ${salaryForm.type === 'salary' ? 'bg-brand-600 text-white border-brand-600' : 'border-slate-300 dark:border-slate-600 text-slate-500'}`}
+              >Salary Payment</button>
+              <button type="button" onClick={() => setSalaryForm({ ...salaryForm, type: 'advance' })}
+                className={`flex-1 py-2 rounded-lg text-sm font-medium border transition ${salaryForm.type === 'advance' ? 'bg-amber-500 text-white border-amber-500' : 'border-slate-300 dark:border-slate-600 text-slate-500'}`}
+              >Advance</button>
             </div>
-            <input className="input" type="number" value={salaryForm.amount} onChange={(e) => setSalaryForm({ ...salaryForm, amount: e.target.value })} placeholder={String(salaryDue)} />
+            <p className="text-xs text-slate-400 mt-1">
+              {salaryForm.type === 'advance'
+                ? 'Money given ahead of the usual pay date — recorded and printed as an advance, not a regular payment.'
+                : 'A scheduled salary payment against this month.'}
+            </p>
           </div>
-          <div><label className="label">Paid From</label>
-            <select className="input" value={salaryForm.source} onChange={(e) => setSalaryForm({ ...salaryForm, source: e.target.value })}>
-              <option value="cash">Cash</option><option value="bank">Bank</option><option value="bkash">bKash</option>
-              <option value="nagad">Nagad</option><option value="rocket">Rocket</option><option value="card">Card</option>
-            </select>
+
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="label mb-0">Amount to Pay Now (split across methods if needed)</label>
+              <button type="button" className="text-xs text-brand-600" onClick={() => setSalaryForm({ ...salaryForm, payments: [{ method: salaryForm.payments[0]?.method || 'cash', amount: String(salaryDue) }] })}>Pay full due</button>
+            </div>
+            <div className="space-y-2">
+              {salaryForm.payments.map((p, i) => (
+                <div key={i} className="flex gap-1.5 items-center">
+                  <select className="input !w-28 shrink-0" value={p.method} onChange={(e) => setSalaryPaymentRow(i, 'method', e.target.value)}>
+                    <option value="cash">Cash</option><option value="bank">Bank</option>
+                    <option value="bkash">bKash</option><option value="nagad">Nagad</option>
+                    <option value="rocket">Rocket</option><option value="card">Card</option>
+                  </select>
+                  <input
+                    className="input" type="number"
+                    placeholder={i === 0 ? String(salaryDue) : '0'}
+                    value={p.amount}
+                    onChange={(e) => setSalaryPaymentRow(i, 'amount', e.target.value)}
+                  />
+                  <button type="button" className="btn-ghost p-1.5 shrink-0" title="Fill remaining" onClick={() => fillSalaryRemaining(i)}>=</button>
+                  {salaryForm.payments.length > 1 && <button type="button" className="text-red-500 p-1 shrink-0" onClick={() => removeSalaryPaymentRow(i)}><Trash2 size={14} /></button>}
+                </div>
+              ))}
+            </div>
+            <button type="button" className="btn-ghost mt-1.5 !py-1 text-xs" onClick={addSalaryPaymentRow}><Plus size={13} /> Add payment method</button>
+            {salaryPaidNow > salaryDue && (
+              <p className="text-xs text-red-500 mt-1">Total ({taka(salaryPaidNow)}) is more than the remaining due ({taka(salaryDue)}).</p>
+            )}
           </div>
-          <p className="text-xs text-slate-400">Each payment is booked as its own expense (category "Salary") — pay in parts and settle the rest anytime later.</p>
+          <p className="text-xs text-slate-400">Each payment is booked as its own expense (category "Salary") — pay in parts, split across methods, and settle the rest anytime later.</p>
         </div>
       </Modal>
 

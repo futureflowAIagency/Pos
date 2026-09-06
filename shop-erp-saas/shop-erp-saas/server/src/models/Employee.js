@@ -1,10 +1,24 @@
 import mongoose from 'mongoose';
 
-// One instalment of a month's salary being paid (supports paying in parts).
+// One tender line of a (possibly split) salary payment, e.g. { method: 'bkash', amount: 2000 }.
+const salaryTenderSchema = new mongoose.Schema(
+  { method: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' }, amount: { type: Number, default: 0 } },
+  { _id: false }
+);
+
+// One instalment of a month's salary being paid (supports paying in parts, and
+// paying that one part across several methods at once — cash + bkash in the
+// same payment, mirrors Sale.payments[] from Phase 11).
 const salaryPaymentSchema = new mongoose.Schema(
   {
-    amount: { type: Number, required: true },
-    method: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' },
+    amount: { type: Number, required: true }, // total of this payment (sum of tenders when split)
+    method: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' }, // legacy/display field — the first tender used
+    // multi-method breakdown, only populated when more than one tender was used
+    // in this single payment; empty for a plain single-method payment.
+    tenders: { type: [salaryTenderSchema], default: [] },
+    // Whether this was a scheduled salary payment or an advance given ahead of
+    // it — shown on the printed slip so it's clear which one moved money.
+    type: { type: String, enum: ['salary', 'advance'], default: 'salary' },
     date: { type: Date, default: Date.now },
   },
   { _id: false }
