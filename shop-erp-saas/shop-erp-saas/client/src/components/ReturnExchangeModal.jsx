@@ -158,7 +158,7 @@ export default function ReturnExchangeModal({ sale, onClose, onDone }) {
                 </thead>
                 <tbody>
                   {lines.map((it) => (
-                    <tr key={it.index} className="border-t border-slate-100 dark:border-slate-700">
+                    <tr key={it.index} className="border-t border-brand-200 dark:border-slate-700">
                       <td className="px-3 py-2"><input type="checkbox" checked={!!selected[it.index]} onChange={(e) => toggleLine(it.index, e.target.checked)} /></td>
                       <td className="px-3 py-2">{it.name}{it.imei1 && <div className="text-xs text-slate-400">IMEI: {it.imei1}</div>}</td>
                       <td className="px-3 py-2 text-right">{it.available}</td>

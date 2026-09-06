@@ -20,7 +20,7 @@ export default function DataTable({ columns, rows, empty = 'No data found', rowK
                 <tr
                   key={row[rowKey]}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
-                  className={`border-t border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/40 ${onRowClick ? 'cursor-pointer' : ''}`}
+                  className={`border-t border-brand-200 dark:border-slate-700 hover:bg-brand-50 dark:hover:bg-slate-700/40 ${onRowClick ? 'cursor-pointer' : ''}`}
                 >
                   {columns.map((c) => (
                     <td key={c.key} className={`px-4 py-3 ${c.className || ''}`}>

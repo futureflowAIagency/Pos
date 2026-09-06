@@ -355,7 +355,7 @@ function LedgerModal({ supplier, onClose, onPrint }) {
               <tbody>
                 {data.entries.length === 0 && <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-400">No entries</td></tr>}
                 {data.entries.map((e) => (
-                  <tr key={e._id} className="border-t border-slate-100 dark:border-slate-700">
+                  <tr key={e._id} className="border-t border-brand-200 dark:border-slate-700">
                     <td className="px-3 py-2">{fmtDateTime(e.createdAt)}</td>
                     <td className="px-3 py-2 capitalize">
                       {e.kind === 'adjustment'
@@ -415,7 +415,7 @@ function SupplierProductsModal({ supplier, onClose }) {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.productId} className="border-t border-slate-100 dark:border-slate-700">
+                <tr key={r.productId} className="border-t border-brand-200 dark:border-slate-700">
                   <td className="px-3 py-2">{r.name}</td>
                   <td className="px-3 py-2 text-right">{r.purchasedQty}</td>
                   <td className="px-3 py-2 text-right">{r.soldQty}</td>

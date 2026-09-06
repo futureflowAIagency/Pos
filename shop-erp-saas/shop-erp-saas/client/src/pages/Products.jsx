@@ -634,7 +634,7 @@ export default function Products() {
             onChange={(e) => setModelSearch(e.target.value)}
           />
           {modelSuggestions.length > 0 && (
-            <div className="mt-1 max-h-72 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
+            <div className="mt-1 max-h-72 overflow-y-auto rounded-lg border border-brand-200 dark:border-slate-700 divide-y divide-brand-200 dark:divide-slate-700">
               {modelSuggestions.map((p) => (
                 <button
                   key={p._id}
@@ -953,7 +953,7 @@ function UnitsModal({ product, isMobile, onClose, onChanged }) {
           <tbody>
             {units.length === 0 && <tr><td colSpan={isMobile ? 5 : 3} className="px-3 py-6 text-center text-slate-400">No units yet</td></tr>}
             {isMobile ? units.map((u) => (
-              <tr key={u._id} className="border-t border-slate-100 dark:border-slate-700">
+              <tr key={u._id} className="border-t border-brand-200 dark:border-slate-700">
                 <td className="px-3 py-2">{u.imei1 || '—'}</td>
                 <td className="px-3 py-2">{u.imei2 || '—'}</td>
                 <td className="px-3 py-2">{u.serial || '—'}</td>
@@ -965,7 +965,7 @@ function UnitsModal({ product, isMobile, onClose, onChanged }) {
                 </td>
               </tr>
             )) : units.map((u) => (
-              <tr key={u._id} className="border-t border-slate-100 dark:border-slate-700">
+              <tr key={u._id} className="border-t border-brand-200 dark:border-slate-700">
                 <td className="px-3 py-2 font-mono">{u.serial || u.imei1 || '—'}</td>
                 <td className="px-3 py-2">
                   <span className={`badge ${u.status === 'in_stock' ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-600'}`}>{u.status === 'in_stock' ? 'In-Stock' : 'Sold'}</span>

@@ -15,7 +15,7 @@ body {
 
 /* Reusable component classes */
 @layer components {
-  .card { @apply bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-brand-100 dark:border-slate-700; }
+  .card { @apply bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-brand-200 dark:border-slate-700; }
   .btn { @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition focus:outline-none disabled:opacity-50; }
   .btn-primary { @apply btn bg-brand-600 text-white hover:bg-brand-700; }
   .btn-ghost { @apply btn bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600; }

@@ -66,7 +66,7 @@ export default function NotificationBell() {
           {/* click-outside-to-close backdrop, same idiom as Modal.jsx */}
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-80 max-h-96 overflow-y-auto z-50 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg">
-            <div className="flex items-center justify-between px-3 py-2 border-b border-slate-100 dark:border-slate-700">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-brand-200 dark:border-slate-700">
               <span className="font-semibold text-sm">{t('Notifications')}</span>
               {unread > 0 && (
                 <button onClick={markAllRead} className="text-xs text-brand-600 hover:underline flex items-center gap-1">

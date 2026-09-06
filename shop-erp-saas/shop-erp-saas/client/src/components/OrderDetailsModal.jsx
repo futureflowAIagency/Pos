@@ -195,7 +195,7 @@ export default function OrderDetailsModal({ saleId, onClose, onChanged }) {
                 </thead>
                 <tbody>
                   {sale.items.map((it, i) => (
-                    <tr key={i} className="border-t border-slate-100 dark:border-slate-700">
+                    <tr key={i} className="border-t border-brand-200 dark:border-slate-700">
                       <td className="px-3 py-2">
                         {it.name}
                         {it.imei1 && <div className="text-xs text-slate-400">IMEI: {it.imei1}</div>}

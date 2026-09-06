@@ -253,7 +253,7 @@ export default function Dashboard() {
       <div className="card p-4">
         <h3 className="font-semibold mb-3 flex items-center gap-2"><Activity size={18} className="text-brand-600" /> Recent Activities</h3>
         {data.recentActivities?.length ? (
-          <ul className="divide-y divide-slate-100 dark:divide-slate-700">
+          <ul className="divide-y divide-brand-200 dark:divide-slate-700">
             {data.recentActivities.map((a, i) => (
               <li key={i} className="py-2 flex items-center justify-between text-sm">
                 <span><span className="font-medium">{niceAction(a.action)}</span>{a.entity ? <span className="text-slate-400"> · {a.entity}</span> : null}</span>

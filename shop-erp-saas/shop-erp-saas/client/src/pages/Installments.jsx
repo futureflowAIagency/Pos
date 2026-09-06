@@ -582,7 +582,7 @@ export default function Installments() {
               </thead>
               <tbody>
                 {detail.schedule.map((s) => (
-                  <tr key={s.no} className="border-t border-slate-100 dark:border-slate-700">
+                  <tr key={s.no} className="border-t border-brand-200 dark:border-slate-700">
                     <td className="px-3 py-2">{s.no}</td>
                     <td className="px-3 py-2">{fmtDate(s.dueDate)}</td>
                     <td className="px-3 py-2 text-right">{taka(s.amount)}</td>
