@@ -16,7 +16,7 @@ const bn = {
   Products: 'পণ্য', 'POS / Sales': 'পিওএস / বিক্রয়', Customers: 'গ্রাহক',
   Suppliers: 'সরবরাহকারী', Employees: 'কর্মচারী', Finance: 'অর্থ',
   Marketing: 'মার্কেটিং', CRM: 'সিআরএম', Subscription: 'সাবস্ক্রিপশন',
-  'Activity Logs': 'কার্যকলাপ লগ', Settings: 'সেটিংস', 'Warranty Check': 'ওয়ারেন্টি চেক',
+  'Activity Logs': 'কার্যকলাপ লগ', Settings: 'সেটিংস',
   'EMI / Installments': 'ইএমআই / কিস্তি', 'Service / Repair': 'সার্ভিস / মেরামত',
   'Admin Panel': 'অ্যাডমিন প্যানেল', Notifications: 'নোটিফিকেশন',
   Branches: 'ব্রাঞ্চ', 'All Branches': 'সব ব্রাঞ্চ', 'Stock Transfer': 'স্টক ট্রান্সফার',

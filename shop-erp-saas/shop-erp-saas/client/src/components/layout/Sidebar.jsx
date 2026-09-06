@@ -63,7 +63,7 @@ const baseLinks = [
 
 // Extra modules enabled only for Technology Management System businesses.
 const mobileLinks = [
-  { to: '/warranty', key: 'warranty', label: 'Warranty Check', icon: ShieldQuestion },
+  { to: '/warranty', key: 'warranty', label: 'Warranty', icon: ShieldQuestion },
   { to: '/installments', key: 'installments', label: 'EMI / Installments', icon: CalendarClock },
   { to: '/services', key: 'services', label: 'Service / Repair', icon: Wrench },
 ];

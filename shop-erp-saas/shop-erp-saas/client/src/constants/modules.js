@@ -15,7 +15,7 @@ export const MODULES = [
   { key: 'subscription', label: 'Subscription' },
   { key: 'activity', label: 'Activity Logs' },
   { key: 'settings', label: 'Settings' },
-  { key: 'warranty', label: 'Warranty Check' },
+  { key: 'warranty', label: 'Warranty' },
   { key: 'installments', label: 'EMI / Installments' },
   { key: 'services', label: 'Service / Repair' },
 ];

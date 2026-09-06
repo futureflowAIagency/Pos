@@ -27,6 +27,7 @@ import transferRoutes from './transferRoutes.js';
 import branchRoutes from './branchRoutes.js';
 import stockTransferRoutes from './stockTransferRoutes.js';
 import scanSessionRoutes from './scanSessionRoutes.js';
+import warrantyClaimRoutes from './warrantyClaimRoutes.js';
 import { getAppVersion } from '../utils/appVersion.js';
 
 const router = Router();
@@ -60,6 +61,7 @@ router.use('/transfers', transferRoutes);
 router.use('/branches', branchRoutes);
 router.use('/stock-transfers', stockTransferRoutes);
 router.use('/scan-sessions', scanSessionRoutes);
+router.use('/warranty-claims', warrantyClaimRoutes);
 
 router.get('/health', (req, res) => res.json({ success: true, message: 'API healthy', ts: Date.now() }));
 // Public (no auth) — the Sidebar polls this to notice a fresh deploy and
