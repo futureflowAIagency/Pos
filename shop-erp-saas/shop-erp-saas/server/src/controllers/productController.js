@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
@@ -7,6 +8,7 @@ import Product from '../models/Product.js';
 import PhoneUnit from '../models/PhoneUnit.js';
 import Supplier from '../models/Supplier.js';
 import Purchase from '../models/Purchase.js';
+import Sale from '../models/Sale.js';
 import StockSnapshot from '../models/StockSnapshot.js';
 
 const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
@@ -296,5 +298,61 @@ export const getStockSnapshot = asyncHandler(async (req, res) => {
   ok(res, {
     today: { date: today, totalProducts, totalQty },
     lastDay: lastDay ? { date: lastDay.date, totalProducts: lastDay.totalProducts, totalQty: lastDay.totalQty } : null,
+  });
+});
+
+// @route GET /api/products/:id/report
+// A single product's full picture for the "Stock Print by Model" report:
+// how many pieces have been sold in total, which supplier(s) it was bought
+// from and how much each time, and the current stock on hand.
+export const getProductReport = asyncHandler(async (req, res) => {
+  const product = await Product.findOne(branchFilter(req, { _id: req.params.id })).populate('supplier', 'name');
+  if (!product) throw new ApiError(404, 'Product not found');
+  const bId = new mongoose.Types.ObjectId(req.businessId);
+  const pId = product._id;
+
+  const [soldAgg, purchaseAgg] = await Promise.all([
+    // Sold is NET of returns — a returned item goes back on the shelf (the
+    // return already restocks Product.stock), so it must stop counting as
+    // sold here too, same rule supplierProductBreakdown already applies.
+    Sale.aggregate([
+      { $match: { business: bId, 'items.product': pId } },
+      { $unwind: '$items' },
+      { $match: { 'items.product': pId } },
+      { $group: {
+        _id: null,
+        soldQty: { $sum: { $subtract: ['$items.qty', { $ifNull: ['$items.returnedQty', 0] }] } },
+        returnedQty: { $sum: { $ifNull: ['$items.returnedQty', 0] } },
+      } },
+    ]),
+    // Every supplier this exact product was ever bought from, and how much —
+    // a product can be restocked from more than one dealer over time, unlike
+    // Product.supplier (the CURRENT/primary one, editable on the product form).
+    Purchase.aggregate([
+      { $match: { business: bId, kind: 'purchase', 'items.product': pId } },
+      { $unwind: '$items' },
+      { $match: { 'items.product': pId } },
+      { $group: { _id: '$supplier', qty: { $sum: '$items.qty' }, lastDate: { $max: '$date' } } },
+      { $sort: { qty: -1 } },
+    ]),
+  ]);
+
+  const supplierIds = purchaseAgg.map((p) => p._id).filter(Boolean);
+  const suppliers = supplierIds.length ? await Supplier.find({ _id: { $in: supplierIds } }).select('name phone') : [];
+  const supplierMap = Object.fromEntries(suppliers.map((s) => [String(s._id), s]));
+  const bySupplier = purchaseAgg.map((p) => ({
+    supplier: p._id ? (supplierMap[String(p._id)]?.name || 'Unknown supplier') : '— No supplier recorded —',
+    phone: p._id ? (supplierMap[String(p._id)]?.phone || '') : '',
+    qty: p.qty,
+    lastDate: p.lastDate,
+  }));
+
+  const sold = soldAgg[0] || { soldQty: 0, returnedQty: 0 };
+  ok(res, {
+    product,
+    totalSold: Math.max(0, sold.soldQty),
+    totalReturned: sold.returnedQty || 0,
+    currentStock: product.stock,
+    suppliers: bySupplier,
   });
 });

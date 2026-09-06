@@ -8,6 +8,7 @@ import LabelPrintModal from '../components/print/LabelPrintModal.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import StockReport from '../components/print/StockReport.jsx';
 import StockReportByBrand from '../components/print/StockReportByBrand.jsx';
+import ProductStockReport from '../components/print/ProductStockReport.jsx';
 import { taka, fmtDate, expiryStatus, daysUntil } from '../utils/format.js';
 import { useConfirm } from '../context/ConfirmContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -70,6 +71,37 @@ export default function Products() {
   const [brandReport, setBrandReport] = useState(null); // { category, groups, today, lastDay }
   const [brandReportOpen, setBrandReportOpen] = useState(false);
   const [brandReportLoading, setBrandReportLoading] = useState(false);
+  // Stock Print by Model — search a specific product by name, then print just
+  // that product's own history: total sold all-time, every supplier it was
+  // bought from, and current stock.
+  const [modelSearchOpen, setModelSearchOpen] = useState(false);
+  const [modelSearch, setModelSearch] = useState('');
+  const [modelSuggestions, setModelSuggestions] = useState([]);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [modelReport, setModelReport] = useState(null);
+  const [modelReportOpen, setModelReportOpen] = useState(false);
+
+  useEffect(() => {
+    if (!modelSearchOpen || !modelSearch.trim()) { setModelSuggestions([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const { data } = await api.get('/products', { params: { search: modelSearch.trim() } });
+        setModelSuggestions(data.data.products.slice(0, 8));
+      } catch { /* ignore — suggestions are best-effort */ }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [modelSearch, modelSearchOpen]);
+
+  const pickModel = async (p) => {
+    setModelLoading(true);
+    try {
+      const { data } = await api.get(`/products/${p._id}/report`);
+      setModelReport(data.data);
+      setModelSearchOpen(false); setModelSearch(''); setModelSuggestions([]);
+      setModelReportOpen(true);
+    } catch (e) { toast.error(e.response?.data?.message || 'Failed to build report'); }
+    setModelLoading(false);
+  };
 
   const load = async () => {
     const { data } = await api.get('/products', { params: { search, category: categoryFilter || undefined } });
@@ -354,6 +386,7 @@ export default function Products() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Products</h1>
         <div className="flex gap-2 flex-wrap">
+          <button className="btn-ghost" onClick={() => setModelSearchOpen(true)}><Printer size={18} /> Stock Print by Model</button>
           <button className="btn-ghost" disabled={brandReportLoading} onClick={openBrandReport}><Printer size={18} /> Stock Print by Brands</button>
           <button className="btn-ghost" disabled={stockReportLoading} onClick={openStockReport}><Printer size={18} /> Stock Print</button>
           <button className="btn-primary" onClick={openNew}><Plus size={18} /> Add Product</button>
@@ -571,6 +604,56 @@ export default function Products() {
             groups={brandReport.groups}
             today={brandReport.today}
             lastDay={brandReport.lastDay}
+          />
+        )}
+      </PrintWrapper>
+
+      {/* Stock Print by Model — search a product by name, pick one, print its
+          own sold/purchased/current-stock history. */}
+      <Modal open={modelSearchOpen} onClose={() => { setModelSearchOpen(false); setModelSearch(''); setModelSuggestions([]); }} title="Stock Print by Model">
+        <div className="relative">
+          <Search size={18} className="absolute left-3 top-2.5 text-slate-400" />
+          <input
+            autoFocus
+            className="input pl-10"
+            placeholder="Type a product name..."
+            value={modelSearch}
+            onChange={(e) => setModelSearch(e.target.value)}
+          />
+          {modelSuggestions.length > 0 && (
+            <div className="mt-1 max-h-72 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
+              {modelSuggestions.map((p) => (
+                <button
+                  key={p._id}
+                  type="button"
+                  disabled={modelLoading}
+                  onClick={() => pickModel(p)}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-between gap-2"
+                >
+                  <span className="truncate">
+                    <span className="font-medium">{p.name}</span>
+                    <span className="text-slate-400 ml-1">{p.category}{p.supplier?.name ? ` • ${p.supplier.name}` : ''}</span>
+                  </span>
+                  <span className="text-xs text-slate-400 shrink-0">{p.stock} pcs</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {modelSearch.trim() && modelSuggestions.length === 0 && (
+            <p className="text-sm text-slate-400 mt-2">No matching product</p>
+          )}
+        </div>
+      </Modal>
+
+      <PrintWrapper open={modelReportOpen} onClose={() => setModelReportOpen(false)} title="Stock Report by Model">
+        {modelReport && (
+          <ProductStockReport
+            business={business}
+            product={modelReport.product}
+            totalSold={modelReport.totalSold}
+            totalReturned={modelReport.totalReturned}
+            currentStock={modelReport.currentStock}
+            suppliers={modelReport.suppliers}
           />
         )}
       </PrintWrapper>
