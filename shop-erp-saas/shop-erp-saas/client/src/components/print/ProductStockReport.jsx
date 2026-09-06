@@ -1,11 +1,12 @@
-import { taka, fmtDate } from '../../utils/format.js';
+import { taka, fmtDate, fmtDateTime } from '../../utils/format.js';
 
 // "Stock Print by Model" — the full picture of one specific product: how much
 // has been sold in total, which supplier(s) it came from and how much each
-// time, and how many are on the shelf right now. Sibling to StockReport.jsx
-// and StockReportByBrand.jsx (both list many products); this one drills into
-// exactly one, reached from a name search on the Products page.
-export default function ProductStockReport({ business, product, totalSold, totalReturned, currentStock, suppliers }) {
+// time, exactly which date each sale happened, and how many are on the shelf
+// right now. Sibling to StockReport.jsx and StockReportByBrand.jsx (both list
+// many products); this one drills into exactly one, reached from a name
+// search on the Products page.
+export default function ProductStockReport({ business, product, totalSold, totalReturned, currentStock, suppliers, sales = [] }) {
   if (!product) return null;
   const totalPurchased = suppliers.reduce((s, r) => s + r.qty, 0);
 
@@ -65,6 +66,40 @@ export default function ProductStockReport({ business, product, totalSold, total
                 <td className="py-1">{s.phone || '—'}</td>
                 <td className="text-right py-1">{s.qty} pcs</td>
                 <td className="text-right py-1">{s.lastDate ? fmtDate(s.lastDate) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h3 className="text-sm font-bold uppercase tracking-wide border-b border-black pb-1 mb-2">
+        Sold On <span className="font-normal normal-case">— {sales.length} sale(s)</span>
+      </h3>
+      {sales.length === 0 ? (
+        <p className="text-sm text-gray-400 py-4 mb-3">This product has never been sold yet.</p>
+      ) : (
+        <table className="w-full text-sm border-collapse mb-5" style={{ breakInside: 'auto' }}>
+          <thead>
+            <tr className="border-b-2 border-black">
+              <th className="text-left py-1">Date</th>
+              <th className="text-left py-1">Invoice</th>
+              <th className="text-left py-1">Customer</th>
+              <th className="text-left py-1">IMEI / Serial</th>
+              <th className="text-right py-1">Qty</th>
+              <th className="text-right py-1">Price</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sales.map((s, i) => (
+              <tr key={i} className="border-b border-gray-200">
+                <td className="py-1">{fmtDateTime(s.createdAt)}</td>
+                <td className="py-1">{s.invoiceNo}</td>
+                <td className="py-1">{s.customerName || 'Walk-in'}</td>
+                <td className="py-1">{s.imei1 || s.serial || '—'}</td>
+                <td className="text-right py-1">
+                  {s.qty}{s.returnedQty > 0 ? <span className="text-gray-500"> ({s.returnedQty} returned)</span> : ''}
+                </td>
+                <td className="text-right py-1">{taka(s.sellingPrice)}</td>
               </tr>
             ))}
           </tbody>

@@ -654,6 +654,7 @@ export default function Products() {
             totalReturned={modelReport.totalReturned}
             currentStock={modelReport.currentStock}
             suppliers={modelReport.suppliers}
+            sales={modelReport.sales}
           />
         )}
       </PrintWrapper>

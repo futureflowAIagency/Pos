@@ -311,7 +311,7 @@ export const getProductReport = asyncHandler(async (req, res) => {
   const bId = new mongoose.Types.ObjectId(req.businessId);
   const pId = product._id;
 
-  const [soldAgg, purchaseAgg] = await Promise.all([
+  const [soldAgg, purchaseAgg, saleRows] = await Promise.all([
     // Sold is NET of returns — a returned item goes back on the shelf (the
     // return already restocks Product.stock), so it must stop counting as
     // sold here too, same rule supplierProductBreakdown already applies.
@@ -335,6 +335,20 @@ export const getProductReport = asyncHandler(async (req, res) => {
       { $group: { _id: '$supplier', qty: { $sum: '$items.qty' }, lastDate: { $max: '$date' } } },
       { $sort: { qty: -1 } },
     ]),
+    // Date-wise sale history — "which date did which one sell" — one row per
+    // line item (a serial-tracked product sold as several devices in one
+    // invoice gets a row per device, since each is its own item entry).
+    Sale.aggregate([
+      { $match: { business: bId, 'items.product': pId } },
+      { $unwind: '$items' },
+      { $match: { 'items.product': pId } },
+      { $project: {
+        invoiceNo: 1, createdAt: 1, customerName: 1,
+        qty: '$items.qty', returnedQty: { $ifNull: ['$items.returnedQty', 0] },
+        sellingPrice: '$items.sellingPrice', imei1: '$items.imei1', serial: '$items.serial',
+      } },
+      { $sort: { createdAt: -1 } },
+    ]),
   ]);
 
   const supplierIds = purchaseAgg.map((p) => p._id).filter(Boolean);
@@ -354,5 +368,6 @@ export const getProductReport = asyncHandler(async (req, res) => {
     totalReturned: sold.returnedQty || 0,
     currentStock: product.stock,
     suppliers: bySupplier,
+    sales: saleRows,
   });
 });
