@@ -29,11 +29,11 @@ const genInvoiceNo = () =>
   'INV-' + Date.now().toString().slice(-8) + '-' + Math.floor(Math.random() * 90 + 10);
 
 // @route POST /api/sales  (POS checkout)
-// body: { items:[{product, qty, unit?}], discount, paid, paymentMethod, payments?:[{method,amount}], customer, customerName, customerPhone, customerNid }
+// body: { items:[{product, qty, unit?}], discount, paid, paymentMethod, payments?:[{method,amount}], customer, customerName, customerPhone, customerNid, customerAddress }
 // `payments` (split/multi-tender) takes precedence when provided; otherwise a single
 // tender is synthesized from paymentMethod+paid (back-compat with older clients).
 export const createSale = asyncHandler(async (req, res) => {
-  const { items = [], discount = 0, paid = 0, paymentMethod = 'cash', payments: reqPayments = null, customer = null, customerName: reqName = '', customerPhone = '', customerNid = '' } = req.body;
+  const { items = [], discount = 0, paid = 0, paymentMethod = 'cash', payments: reqPayments = null, customer = null, customerName: reqName = '', customerPhone = '', customerNid = '', customerAddress = '' } = req.body;
   if (!items.length) throw new ApiError(400, 'No items in sale');
   // Customer identity is OPTIONAL for every shop type — a counter/walk-in sale
   // needs no name or phone. The one exception is enforced below, once the due is
@@ -134,6 +134,7 @@ export const createSale = asyncHandler(async (req, res) => {
           name: String(reqName).trim() || 'Customer',
           phone: String(customerPhone).trim(),
           nid: customerNid || '',
+          address: String(customerAddress || '').trim(),
         }], { session });
       }
 
@@ -144,6 +145,7 @@ export const createSale = asyncHandler(async (req, res) => {
       const nid = customerNid || custDoc?.nid || '';
       if (custDoc) {
         if (customerNid && !custDoc.nid) custDoc.nid = customerNid; // backfill NID captured at sale
+        if (customerAddress && !custDoc.address) custDoc.address = String(customerAddress).trim(); // backfill address captured at sale
         if (due > 0) custDoc.totalDue += due;
         await custDoc.save({ session });
       }
@@ -193,6 +195,7 @@ export const createSale = asyncHandler(async (req, res) => {
   }
 
   await logActivity(req, { action: 'CREATE_SALE', entity: 'Sale', entityId: sale._id, meta: { invoiceNo: sale.invoiceNo, total: sale.total } });
+  await sale.populate('soldBy', 'name'); // so the printed receipt can show "Sold by <name>" straight away
   created(res, { sale });
 });
 
@@ -232,7 +235,7 @@ export const searchInvoices = asyncHandler(async (req, res) => {
 
 // @route GET /api/sales/:id  — full invoice + its due-payment history
 export const getSale = asyncHandler(async (req, res) => {
-  const sale = await Sale.findOne(invoiceScope(req, { _id: req.params.id })).populate('branch', 'name');
+  const sale = await Sale.findOne(invoiceScope(req, { _id: req.params.id })).populate('branch', 'name').populate('soldBy', 'name');
   if (!sale) throw new ApiError(404, 'Sale not found');
   const duePayments = await DuePayment.find(tenantFilter(req, { sale: sale._id })).sort('date');
   ok(res, { sale, duePayments, moneyBack: moneyBackOf(sale) });

@@ -40,7 +40,7 @@ export const customerHistory = asyncHandler(async (req, res) => {
   const customer = await Customer.findOne(tenantFilter(req, { _id: req.params.id }));
   if (!customer) throw new ApiError(404, 'Customer not found');
   const [sales, duePayments] = await Promise.all([
-    Sale.find(tenantFilter(req, { customer: customer._id })).sort('-createdAt'),
+    Sale.find(tenantFilter(req, { customer: customer._id })).sort('-createdAt').populate('soldBy', 'name'),
     DuePayment.find(tenantFilter(req, { customer: customer._id })).sort('-date'),
   ]);
   ok(res, { customer, sales, duePayments });

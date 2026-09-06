@@ -22,6 +22,7 @@ export default function ThermalReceipt({ sale, business }) {
       <div>{fmtDateTime(sale.createdAt)}</div>
       <div>Customer: {sale.customerName}</div>
       {sale.customerNid ? <div>NID: {sale.customerNid}</div> : null}
+      {sale.soldBy?.name ? <div>Sell by "{sale.soldBy.name}"</div> : null}
       <div className="thermal-divider" />
 
       <table>

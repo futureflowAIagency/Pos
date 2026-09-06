@@ -44,6 +44,7 @@ export default function POS() {
   // customer (walk-in removed — phone + name are required, matched to a record)
   const [custPhone, setCustPhone] = useState('');
   const [custName, setCustName] = useState('');
+  const [custAddress, setCustAddress] = useState('');
   const [matchedCustomer, setMatchedCustomer] = useState(null);
   const [customerNid, setCustomerNid] = useState('');
   const [suggestions, setSuggestions] = useState([]);
@@ -77,13 +78,14 @@ export default function POS() {
   // Connected phone scanner (Topbar) — subscribed below once resolveAndAddCode exists.
   const { subscribe: subscribeScanner } = useScanner();
 
-  // Mouse-free checkout chain: search → customer phone → name → (NID) →
+  // Mouse-free checkout chain: search → customer phone → name → address → (NID) →
   // discount → first payment amount → Complete Sale. Each field's Enter key
   // hands focus to the next ref.
   const searchRef = useRef(null);
   const qtyRefs = useRef({}); // lineKey → cart quantity input
   const custPhoneRef = useRef(null);
   const custNameRef = useRef(null);
+  const custAddressRef = useRef(null);
   const nidRef = useRef(null);
   const discountRef = useRef(null);
   const payAmountRef = useRef(null);
@@ -118,7 +120,10 @@ export default function POS() {
         const norm = (s) => (s || '').replace(/\s/g, '');
         const exact = list.find((c) => norm(c.phone) === norm(term)) || null;
         setMatchedCustomer(exact);
-        if (exact) setCustName((n) => n || exact.name);
+        if (exact) {
+          setCustName((n) => n || exact.name);
+          setCustAddress((a) => a || exact.address || '');
+        }
       } catch { /* ignore */ }
     }, 300);
     return () => clearTimeout(t);
@@ -127,6 +132,7 @@ export default function POS() {
   const pickCustomer = (c) => {
     setCustPhone(c.phone || '');
     setCustName(c.name || '');
+    setCustAddress(c.address || '');
     setMatchedCustomer(c);
     setSuggestOpen(false);
     setSuggestions([]);
@@ -341,7 +347,7 @@ export default function POS() {
     return { ...i, qty: q };
   }));
   const removeItem = (key) => setCart((c) => c.filter((i) => lineKey(i) !== key));
-  const resetSale = () => { setCart([]); setDiscount(0); setPayments([{ method: 'cash', amount: '' }]); setCustPhone(''); setCustName(''); setMatchedCustomer(null); setCustomerNid(''); };
+  const resetSale = () => { setCart([]); setDiscount(0); setPayments([{ method: 'cash', amount: '' }]); setCustPhone(''); setCustName(''); setCustAddress(''); setMatchedCustomer(null); setCustomerNid(''); };
 
   const subTotal = cart.reduce((s, i) => s + unitPrice(i) * Number(i.qty || 0), 0);
   const total = Math.max(0, subTotal - Number(discount || 0));
@@ -361,7 +367,7 @@ export default function POS() {
       id: Date.now().toString(),
       heldAt: new Date().toISOString(),
       customerName: custName || custPhone || 'No customer',
-      custPhone, custName, customerNid, discount, payments,
+      custPhone, custName, custAddress, customerNid, discount, payments,
       itemCount: cart.reduce((s, i) => s + i.qty, 0),
       cart,
     };
@@ -373,7 +379,7 @@ export default function POS() {
 
   const resumeHold = (h) => {
     if (cart.length && !confirm('Resuming will replace the current cart. Continue?')) return;
-    setCart(h.cart); setCustPhone(h.custPhone || ''); setCustName(h.custName || ''); setCustomerNid(h.customerNid || '');
+    setCart(h.cart); setCustPhone(h.custPhone || ''); setCustName(h.custName || ''); setCustAddress(h.custAddress || ''); setCustomerNid(h.customerNid || '');
     setDiscount(h.discount || 0);
     // back-compat: older held bills stored a single paid+method instead of payments[]
     setPayments(h.payments?.length ? h.payments : [{ method: h.method || 'cash', amount: h.paid || '' }]);
@@ -430,6 +436,7 @@ export default function POS() {
         customer: matchedCustomer?._id || null,
         customerName: custName.trim(),
         customerPhone: custPhone.trim(),
+        customerAddress: custAddress.trim(),
         customerNid: isMobile ? customerNid : '',
       });
       setLastSale(data.data.sale);
@@ -646,7 +653,7 @@ export default function POS() {
                 className="input"
                 value={custName}
                 onChange={(e) => setCustName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (isMobile ? nidRef : discountRef).current?.focus(); } }}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); custAddressRef.current?.focus(); } }}
                 placeholder="Customer name"
               />
             </div>
@@ -656,6 +663,17 @@ export default function POS() {
               ✓ Existing customer{matchedCustomer.totalDue > 0 ? ` • current due ${taka(matchedCustomer.totalDue)}` : ''}
             </p>
           )}
+          <div>
+            <label className="label">Customer Address (optional)</label>
+            <input
+              ref={custAddressRef}
+              className="input"
+              value={custAddress}
+              onChange={(e) => setCustAddress(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (isMobile ? nidRef : discountRef).current?.focus(); } }}
+              placeholder="Customer address"
+            />
+          </div>
           {isMobile && (
             <div>
               <label className="label">Customer NID / Identity</label>

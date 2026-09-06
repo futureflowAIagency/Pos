@@ -78,6 +78,8 @@ export default function Customers() {
         columns={[
           { key: 'name', label: 'Name' },
           { key: 'phone', label: 'Phone' },
+          { key: 'nid', label: 'NID', render: (r) => r.nid ? <span className="font-mono text-xs">{r.nid}</span> : <span className="text-slate-400">—</span> },
+          { key: 'address', label: 'Address', render: (r) => r.address ? <span className="truncate block max-w-[200px]" title={r.address}>{r.address}</span> : <span className="text-slate-400">—</span> },
           { key: 'totalDue', label: 'Due', className: 'text-right', render: (r) => (
             <div>
               <span className={r.totalDue > 0 ? 'text-red-500 font-semibold' : ''}>{taka(r.totalDue)}</span>
