@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ShieldQuestion, Search, CheckCircle2, XCircle, AlertCircle, ClipboardList, Printer, Trash2 } from 'lucide-react';
+import { ShieldQuestion, Search, CheckCircle2, XCircle, AlertCircle, ClipboardList, Printer, Trash2, Package, Send, PackageCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
+import StatCard from '../components/ui/StatCard.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import WarrantyClaimReceipt from '../components/print/WarrantyClaimReceipt.jsx';
 import { fmtDate, fmtDateTime } from '../utils/format.js';
@@ -15,6 +16,18 @@ const STATUS_LABEL = {
   sent_to_company: 'Sent to Company',
   received_from_company: 'Received from Company',
   delivered_to_customer: 'Delivered to Customer',
+};
+const STATUS_ICON = {
+  pending: Package,
+  sent_to_company: Send,
+  received_from_company: PackageCheck,
+  delivered_to_customer: CheckCircle2,
+};
+const STATUS_ACCENT = {
+  pending: 'brand',
+  sent_to_company: 'amber',
+  received_from_company: 'brand',
+  delivered_to_customer: 'green',
 };
 const STATUS_BADGE = {
   pending: 'bg-slate-200 text-slate-700',
@@ -158,12 +171,20 @@ function ClaimWarranty() {
   const [claims, setClaims] = useState([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  // counts by status — independent of the search/status filter above, so the
+  // dashboard always shows the true total in each stage, not just the filtered view
+  const [summary, setSummary] = useState({ counts: {}, total: 0 });
 
+  const loadSummary = async () => {
+    const { data } = await api.get('/warranty-claims/summary');
+    setSummary(data.data);
+  };
   const load = async () => {
     const { data } = await api.get('/warranty-claims', { params: { search, status: statusFilter || undefined } });
     setClaims(data.data.claims);
   };
   useEffect(() => { const t = setTimeout(load, 300); return () => clearTimeout(t); }, [search, statusFilter]);
+  useEffect(() => { loadSummary(); }, []);
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
@@ -200,24 +221,32 @@ function ClaimWarranty() {
       toast.success(`Claim ${data.data.claim.claimNo} created`);
       setPrintClaim(data.data.claim);
       setForm(emptyForm); setLookupImei(''); setLookupHint('');
-      load();
+      load(); loadSummary();
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
     setSaving(false);
   };
 
   const changeStatus = async (c, status) => {
-    try { await api.patch(`/warranty-claims/${c._id}/status`, { status }); load(); }
+    try { await api.patch(`/warranty-claims/${c._id}/status`, { status }); load(); loadSummary(); }
     catch (e) { toast.error(e.response?.data?.message || 'Error'); }
   };
 
   const del = async (c) => {
     const yes = await confirm({ title: 'Delete claim?', message: `Delete claim ${c.claimNo}?`, confirmText: 'Delete', tone: 'danger' });
     if (!yes) return;
-    await api.delete(`/warranty-claims/${c._id}`); toast.success('Deleted'); load();
+    await api.delete(`/warranty-claims/${c._id}`); toast.success('Deleted'); load(); loadSummary();
   };
 
   return (
     <div className="space-y-4 pt-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {CLAIM_STATUSES.map((s) => (
+          <button key={s} type="button" className="text-left" onClick={() => setStatusFilter(statusFilter === s ? '' : s)}>
+            <StatCard icon={STATUS_ICON[s]} label={STATUS_LABEL[s]} value={summary.counts[s] ?? 0} accent={STATUS_ACCENT[s]} />
+          </button>
+        ))}
+      </div>
+
       <div className="card p-4 space-y-3">
         <p className="text-sm text-slate-500">Search by the device's IMEI/serial to auto-fill its product &amp; customer details — or skip the search and fill the form in by hand (e.g. a device bought elsewhere).</p>
         <div className="flex items-center gap-2">

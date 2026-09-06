@@ -56,6 +56,20 @@ export const lookupForClaim = asyncHandler(async (req, res) => {
   });
 });
 
+// @route GET /api/warranty-claims/summary
+// Counts by status — independent of whatever search/status filter the claims
+// list itself is currently showing, so the dashboard always reflects the truth.
+export const getClaimsSummary = asyncHandler(async (req, res) => {
+  const rows = await WarrantyClaim.aggregate([
+    { $match: branchFilter(req) },
+    { $group: { _id: '$status', count: { $sum: 1 } } },
+  ]);
+  const counts = Object.fromEntries(WARRANTY_CLAIM_STATUSES.map((s) => [s, 0]));
+  rows.forEach((r) => { if (counts[r._id] !== undefined) counts[r._id] = r.count; });
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  ok(res, { counts, total });
+});
+
 // @route GET /api/warranty-claims?status=&search=
 export const getClaims = asyncHandler(async (req, res) => {
   const { status, search } = req.query;
