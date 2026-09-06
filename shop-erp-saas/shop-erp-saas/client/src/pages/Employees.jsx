@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Wallet, Pencil, Eye, Search, ChevronLeft, ChevronRight, Power, X, Upload, KeyRound, Copy, ShieldCheck } from 'lucide-react';
+import { Plus, Trash2, Wallet, Pencil, Eye, Search, ChevronLeft, ChevronRight, Power, X, Upload, KeyRound, Copy, ShieldCheck, Printer } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import { uploadImage } from '../api/upload.js';
@@ -404,6 +404,40 @@ export default function Employees() {
                 <Info label="Account Created" value={fmtDate(viewEmp.createdAt)} />
               </div>
             </div>
+
+            {viewEmp.salaryHistory?.length > 0 && (
+              <div>
+                <h4 className="font-semibold text-sm text-slate-500 uppercase tracking-wide mb-2">Salary History</h4>
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                  {[...viewEmp.salaryHistory].sort((a, b) => b.month.localeCompare(a.month)).map((rec) => (
+                    <div key={rec.month} className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="font-medium">{rec.month}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-slate-400">{taka(rec.paidAmount)} / {taka(rec.amount)}</span>
+                          <span className={`badge ${rec.status === 'paid' ? 'bg-green-100 text-green-700' : rec.status === 'partial' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{rec.status}</span>
+                        </span>
+                      </div>
+                      {rec.payments?.length > 0 && (
+                        <div className="mt-1.5 space-y-1">
+                          {rec.payments.map((p, i) => (
+                            <div key={i} className="flex items-center justify-between text-xs text-slate-500 pl-2">
+                              <span>
+                                {fmtDate(p.date)} — {taka(p.amount)} ({p.tenders?.length > 1 ? 'split' : p.method}){p.type === 'advance' ? ' · Advance' : ''}
+                              </span>
+                              <button
+                                className="btn-ghost p-1" title="Print this payment's receipt"
+                                onClick={() => { setViewEmp(null); setSlip({ employee: viewEmp, record: { ...rec, payments: [p] } }); }}
+                              ><Printer size={13} /></button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="flex justify-end gap-2 pt-2">
               <button className="btn-ghost" onClick={() => { const e = viewEmp; setViewEmp(null); openEdit(e); }}><Pencil size={16} /> Edit</button>
