@@ -34,9 +34,15 @@ const PRICE_CARDS = 6;
 
 export default function Products() {
   const confirm = useConfirm();
-  const { business } = useAuth();
+  const { business, user } = useAuth();
   const isMobile = business?.type === 'mobile';
   const isPharmacy = business?.type === 'pharmacy';
+  // Owner/superadmin always see the purchase/buy price; a staff login needs
+  // the 'view-buy-price' permission explicitly (Employees → Login Access).
+  // The server also redacts/ignores purchasePrice for a restricted staff
+  // regardless of this — this just keeps the UI from showing an empty,
+  // confusing field for something it already knows is hidden.
+  const canViewBuyPrice = user?.role !== 'staff' || (user?.permissions || []).includes('view-buy-price');
   // Barcode / per-unit tracking is available to Mobile + General shops; Pharmacy
   // has no barcode system at all (per client request).
   const serialEnabled = !isPharmacy;
@@ -348,7 +354,7 @@ export default function Products() {
       </div>
     )},
     { key: 'category', label: 'Category' },
-    { key: 'purchasePrice', label: 'Buy', className: 'text-right', render: (r) => taka(r.purchasePrice) },
+    ...(canViewBuyPrice ? [{ key: 'purchasePrice', label: 'Buy', className: 'text-right', render: (r) => taka(r.purchasePrice) }] : []),
     { key: 'sellingPrice', label: 'Sell', className: 'text-right', render: (r) => (
       (r.discountPercent > 0)
         ? <span><span className="line-through text-slate-400">{taka(r.sellingPrice)}</span> <span className="font-semibold">{taka(discounted(r))}</span></span>
@@ -432,10 +438,12 @@ export default function Products() {
                   {[isMobile && variantLabel(p), p.category, p.supplier?.name].filter(Boolean).join(' • ')}
                 </p>
                 <div className="flex items-end justify-between gap-2 mt-2">
-                  <div>
-                    <p className="text-[11px] uppercase tracking-wide text-slate-400">Buy</p>
-                    <p className="font-semibold">{taka(p.purchasePrice)}</p>
-                  </div>
+                  {canViewBuyPrice && (
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wide text-slate-400">Buy</p>
+                      <p className="font-semibold">{taka(p.purchasePrice)}</p>
+                    </div>
+                  )}
                   <div>
                     <p className="text-[11px] uppercase tracking-wide text-slate-400">Sell</p>
                     <p className="text-lg font-bold text-brand-600">{taka(discounted(p))}</p>
@@ -448,11 +456,14 @@ export default function Products() {
                     <p className={`font-semibold ${p.stock <= p.lowStockAlert ? 'text-red-500' : ''}`}>{p.stock} {p.unit}</p>
                   </div>
                 </div>
-                {/* imported stock often has no price yet — say so instead of a bare ৳0 */}
-                {!p.purchasePrice && !p.sellingPrice && (
+                {/* imported stock often has no price yet — say so instead of a bare ৳0.
+                    A restricted staff never sees purchasePrice (always null), so their
+                    "not set yet" check only looks at sellingPrice — otherwise every
+                    product would wrongly look unpriced to them. */}
+                {(canViewBuyPrice ? !p.purchasePrice && !p.sellingPrice : !p.sellingPrice) && (
                   <p className="text-[11px] text-amber-600 mt-1.5">Price not set yet — click to add it</p>
                 )}
-                {p.sellingPrice > 0 && p.purchasePrice > 0 && (
+                {canViewBuyPrice && p.sellingPrice > 0 && p.purchasePrice > 0 && (
                   <p className="text-[11px] text-slate-400 mt-1.5">Profit {taka(discounted(p) - p.purchasePrice)} per {p.unit}</p>
                 )}
               </button>
@@ -513,7 +524,9 @@ export default function Products() {
               </div>
             )}
 
-            <div><label className="label">Purchase Price</label><input className="input" type="number" value={form.purchasePrice} onChange={set('purchasePrice')} /></div>
+            {canViewBuyPrice && (
+              <div><label className="label">Purchase Price</label><input className="input" type="number" value={form.purchasePrice} onChange={set('purchasePrice')} /></div>
+            )}
             <div><label className="label">Selling Price</label><input className="input" type="number" value={form.sellingPrice} onChange={set('sellingPrice')} /></div>
             <div>
               <label className="label">Discount (%)</label>

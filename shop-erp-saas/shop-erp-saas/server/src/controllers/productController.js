@@ -14,6 +14,17 @@ import StockSnapshot from '../models/StockSnapshot.js';
 const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// Owner/superadmin always see the purchase/buy price; a staff login needs the
+// 'view-buy-price' permission explicitly — separate from having Products
+// access itself, since an owner may want staff to manage stock without
+// seeing what it actually cost.
+const canViewBuyPrice = (req) => req.user.role !== 'staff' || (req.user.permissions || []).includes('view-buy-price');
+// Redacts purchasePrice on a plain object (call .toObject()/.toJSON() on a
+// Mongoose doc first) — null rather than deleting the key, so the client's
+// shape stays predictable (a missing vs. hidden field would otherwise look
+// the same as "not set" everywhere the UI checks for it).
+const hideBuyPrice = (obj) => { obj.purchasePrice = null; return obj; };
+
 // Generate a barcode value that's unique within the active branch's catalog.
 const genBarcodeValue = () => String(Date.now()).slice(-9) + String(Math.floor(Math.random() * 900 + 100));
 const uniqueBarcode = async (req) => {
@@ -48,7 +59,8 @@ export const getProducts = asyncHandler(async (req, res) => {
 
   let products = await Product.find(q).sort('-createdAt').populate('supplier', 'name');
   if (lowStock === 'true') products = products.filter((p) => p.stock <= p.lowStockAlert);
-  ok(res, { products, count: products.length });
+  const out = canViewBuyPrice(req) ? products : products.map((p) => hideBuyPrice(p.toObject()));
+  ok(res, { products: out, count: out.length });
 });
 
 // @route GET /api/products/barcode/:code  — resolve a product by its barcode (scan)
@@ -205,6 +217,11 @@ export const updateProduct = asyncHandler(async (req, res) => {
   // try (and fail) to interpret '' as an ObjectId
   const body = { ...req.body };
   if ('supplier' in body && !body.supplier) body.supplier = null;
+  // A staff login without 'view-buy-price' never actually sees the real
+  // purchasePrice (getProducts redacts it), so their Edit form's field is
+  // blank by construction — submitting that blank must NOT overwrite the
+  // real stored value. Simply drop the field rather than trust it.
+  if (!canViewBuyPrice(req)) delete body.purchasePrice;
 
   const product = await Product.findOneAndUpdate(
     branchFilter(req, { _id: req.params.id }),
@@ -213,7 +230,8 @@ export const updateProduct = asyncHandler(async (req, res) => {
   ).populate('supplier', 'name');
   if (!product) throw new ApiError(404, 'Product not found');
   await logActivity(req, { action: 'UPDATE_PRODUCT', entity: 'Product', entityId: product._id });
-  ok(res, { product }, 'Product updated');
+  const out = canViewBuyPrice(req) ? product : hideBuyPrice(product.toObject());
+  ok(res, { product: out }, 'Product updated');
 });
 
 // @route PATCH /api/products/:id/stock  body: { qty, mode: 'add'|'remove'|'set', note }
@@ -363,7 +381,7 @@ export const getProductReport = asyncHandler(async (req, res) => {
 
   const sold = soldAgg[0] || { soldQty: 0, returnedQty: 0 };
   ok(res, {
-    product,
+    product: canViewBuyPrice(req) ? product : hideBuyPrice(product.toObject()),
     totalSold: Math.max(0, sold.soldQty),
     totalReturned: sold.returnedQty || 0,
     currentStock: product.stock,

@@ -106,9 +106,12 @@ export default function ProductStockReport({ business, product, totalSold, total
         </table>
       )}
 
-      {(product.purchasePrice || product.sellingPrice) ? (
+      {(product.purchasePrice != null || product.sellingPrice) ? (
         <div className="flex justify-between text-sm border-t-2 border-black pt-2">
-          <span>Buy Price: {taka(product.purchasePrice || 0)}</span>
+          {/* purchasePrice comes back null (not just 0/blank) specifically when
+              this login lacks 'view-buy-price' — omit the line entirely rather
+              than print a misleading ৳0 */}
+          {product.purchasePrice != null && <span>Buy Price: {taka(product.purchasePrice)}</span>}
           <span>Sell Price: {taka(product.sellingPrice || 0)}</span>
         </div>
       ) : null}

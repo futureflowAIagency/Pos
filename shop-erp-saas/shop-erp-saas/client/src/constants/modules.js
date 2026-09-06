@@ -18,4 +18,7 @@ export const MODULES = [
   { key: 'warranty', label: 'Warranty' },
   { key: 'installments', label: 'EMI / Installments' },
   { key: 'services', label: 'Service / Repair' },
+  // Not a page — whether this login can see the purchase/buy price at all,
+  // separate from having Products access itself.
+  { key: 'view-buy-price', label: 'View Buy Price (Products)' },
 ];
