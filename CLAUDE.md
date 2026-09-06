@@ -5,7 +5,9 @@
 > done, what remains, decisions made, and where each feature lives in the code.
 > **Update this file after every completed phase / meaningful change.**
 
-Last updated: **2026-08-11** — Phase 28 (session-3 fixes: modal outside-click, stock quantity button, Money Back, Invoice Search, supplier sold-vs-returns, EMI as a real sale with per-instalment profit) complete; previously:  all 10 original phases complete; Phase 11–14 complete; Phase 15 (Scan IMEI with AI) was built then fully removed at client request; a real Products-search bug fix landed; Low Stock Alert pagination fix complete; Phase 16 (Migration Excel template + existing-vs-new IMEI logic + accept/decline review) complete; Phase 17 (keyboard-only POS for Pharmacy — name-search suggestions + Enter chain) complete; Phase 18 (POS quantity step + Shift+Enter to customer + optional customer name/phone) complete; Phase 19 (expired stock warned + blocked from sale) complete; Phase 20 (Smart Stock Import: name-only files now import; template columns no longer silently dropped) complete; Phase 21 (Smart Import bulk-DB rewrite — 550-row uploads no longer time out) complete; Phase 22 (supplier due directly editable) complete; Phase 23 (business type renamed + admin-panel user deletion) complete; Phase 24 (Products search price panel) complete; Phase 25 (Multi-Branch Support) complete; Phase 26 (customer due-date reminders + a real notification system) complete — shipped with a hotfix (dead `useRef` reference crashed every logged-in page, caught via the client's browser console and fixed same-day); **Phase 27 (Sidebar app-version indicator + "Relaunch to update" prompt) also complete** (see §5 change log)
+Last updated: **2026-09-06** — Phase 28 (session-3 fixes) complete; **Phase 29 (Admin Panel data visibility: per-shop branch/data-usage view + a full data browser)**, **Phase 30 ("Scan with Phone" — remote camera barcode scanning, no app install)**, **Phase 31 (thermal receipt right-edge clipping — real root cause, in 3 rounds)**, and **Phase 32 (Stock Transfer between branches)** all complete; plus a same-day hotfix (Pay Salary threw a validation error because Phase 25's now-required `Expense.branch` was never added to the salary-payment code) that also added split-tender + advance-vs-salary payment types. See §3 for each and §5 for the full narrative. Previously: all 10 original phases complete; Phase 11–14 complete; Phase 15 (Scan IMEI with AI) was built then fully removed at client request; a real Products-search bug fix landed; Low Stock Alert pagination fix complete; Phase 16 (Migration Excel template + existing-vs-new IMEI logic + accept/decline review) complete; Phase 17 (keyboard-only POS for Pharmacy — name-search suggestions + Enter chain) complete; Phase 18 (POS quantity step + Shift+Enter to customer + optional customer name/phone) complete; Phase 19 (expired stock warned + blocked from sale) complete; Phase 20 (Smart Stock Import: name-only files now import; template columns no longer silently dropped) complete; Phase 21 (Smart Import bulk-DB rewrite — 550-row uploads no longer time out) complete; Phase 22 (supplier due directly editable) complete; Phase 23 (business type renamed + admin-panel user deletion) complete; Phase 24 (Products search price panel) complete; Phase 25 (Multi-Branch Support) complete; Phase 26 (customer due-date reminders + a real notification system) complete — shipped with a hotfix (dead `useRef` reference crashed every logged-in page, caught via the client's browser console and fixed same-day); Phase 27 (Sidebar app-version indicator + "Relaunch to update" prompt) complete.
+
+> **Note on continuity (2026-09-06):** Phases 29–32 below and their §5 entries were written up retroactively while fixing the Pay Salary bug — a prior session did the actual work (visible in `git log`) but never updated this file, so the phase numbers/dates here are reconstructed from commit messages, not live at the time. Also: this file's own §0 "Working dir" path (`...Desktop\Important Files\shop-erp-saas-updated`) is stale — the real working directory for the last several sessions has been `C:\Users\MIHI\Desktop\shop-erp-saas-updated` (no "Important Files"); left uncorrected since it's a pre-existing note, not something this update was asked to fix.
 
 ---
 
@@ -612,6 +614,116 @@ Six freeform client issues (Bangla, no `next promt.txt` this round).
 - **Deliberately not done:** an EMI plan still does **not** create a `Sale` document. Its money already flows through the balance engine (down payment + instalments, since Phase 6) and its outstanding balance is EMI Receivable; minting a Sale too would double-count revenue and the receivable. EMI collections also stay out of "Total Income" (still sales-only) and are shown in their own row — only *profit* was folded in, which is what was asked.
 - Verified: `node --check` across the whole server tree + full `app.js` import-chain ✓; a 13-case logic-fixture test of the EMI price/markup boxes (flat extra, percentage extra, typing the EMI price directly, no markup, an EMI price *below* the product price, and a hand-typed item with no product) — 13/13 ✓; a 24-case logic-fixture test of the EMI recognition rules (the client's own 28k/35k example, down-payment share, per-instalment share, whole-lifecycle summing to exactly the plan profit, out-of-window exclusion, missing-cost handling) and the extra-money arithmetic (overpay, partial return, full return, underpaid, invoice discounted after the fact) — 24/24 ✓; client `vite build` ✓; every identifier in each touched component traced against its import/declaration (the Phase-26 lesson). Not exercised against a live database — same standing limitation as every prior phase.
 
+### ✅ Phase 29 — Admin Panel: per-shop branch/data visibility + a data browser (2026-08-15)
+Superadmin-side asks, freeform: (1) see from the Admin Panel which shops have added
+branches beyond the default one; (2) a way to see how much MongoDB storage each shop is
+using, for usage-based billing; (3) a way to browse a shop's own data (products/sales/
+customers/etc.) without opening MongoDB directly.
+- ✅ `adminController.listBusinesses` now attaches each business's branch list + a
+  `hasExtraBranches` flag (more than the one auto-created Main Branch); `adminOverview`
+  gained a `shopsWithBranches` count. AdminPanel's Businesses table got a **Branches** column.
+- ✅ **Per-shop data browser**: `GET /api/admin/businesses/:id/summary` (per-collection record
+  counts) + `GET /api/admin/businesses/:id/records?model=X&page=` (paginated raw listing),
+  both driven off the same "any model with a `business` path" registry scan `deleteBusiness`
+  (Phase 23) already uses — a model added later is automatically browsable, no extra wiring.
+  New `client/src/pages/admin/BusinessData.jsx` (`/admin/businesses/:id`) — collection chips
+  with counts, curated columns for the common collections, a generic fallback for the rest.
+- ✅ **Exact per-shop storage usage** (`GET /api/admin/storage`) — MongoDB doesn't track this
+  per-tenant natively, so it's computed via a `$bsonSize` aggregation per collection, grouped by
+  business in one pass (cost scales with collection count, not businesses × collections).
+  Deliberately a manual "Calculate Storage Usage" button (it walks every document in the
+  database), not loaded on every page view.
+- Verified: server `node --check` + full import-chain ✓; client `vite build` ✓. Not exercised
+  against a live database (standing limitation).
+
+### ✅ Phase 30 — "Scan with Phone": remote camera barcode scanning, no app install (2026-08-15/16)
+Client wanted their POS to stop depending on the third-party `barcodetopc.com` bridge (which
+requires installing someone else's app/site to turn a phone into a scanner) and asked for an
+equivalent built into this app itself. Rather than replicate a LAN-local WebSocket-bridge
+architecture (which assumes a desktop app, not this app's actual shape — a hosted cloud SaaS
+already reachable over the internet), built a simpler design that reuses the existing backend:
+- ✅ New `ScanSession` model + `scanSessionController`/`scanSessionRoutes` (`/api/scan-sessions`).
+  POS/Products create a session (authenticated) and get back a URL turned into a QR code; a
+  phone scans that QR with its own camera app (no install) and lands on a public
+  `client/src/pages/ScanRemote.jsx` page (no login — gated entirely by a random token in the
+  URL) that reads barcodes/QR/IMEI **in-browser** via `@zxing/browser` and posts each one back.
+  The connected app tab polls for new scans and runs each one through the exact same lookup
+  logic a typed/hardware-scanner code already used.
+- ✅ **Made persistent and app-wide** after client feedback ("connect once, no timeout, works
+  for product entry too, not just POS"): connection moved into a `ScannerContext`/`ScannerProvider`
+  mounted once in `Layout.jsx` (survives page navigation) with a Topbar icon/widget replacing the
+  POS-only button; the server renews the session on every poll (`IDLE_TIMEOUT_MINUTES`, sliding
+  window) instead of a fixed short lifetime. Both POS and Products subscribe to the shared
+  connection (Products pauses its own subscription while Manage-IMEIs or Add/Edit-Product is
+  open, handing the connection to whichever of those needs it, so a scanned code never gets
+  misread as a plain barcode lookup mid-form).
+- ✅ **Scanning-quality fixes** from live client testing: a center guide-line (only a barcode
+  crossing it counts — lets the shopkeeper pick which of several close-together codes on one
+  label gets read), a real "still-in-view" dedupe (was resubmitting the same code every ~1.5s
+  while held in frame), faster zxing decode timing (500ms→100ms), and an automatic one-time
+  retry when the very first camera start renders a black frame (a known Android WebView quirk).
+- Verified: server import-chain + client build after every round; a live phone was used for
+  testing this feature (client-reported issues were real and iterated on) — the only phase with
+  actual device-level verification rather than just logic fixtures.
+
+### ✅ Phase 31 — Thermal receipt right-edge clipping (2026-08-25, 3 rounds)
+Client sent a photo of a printed thermal receipt with every line cut off on the right. Took
+three iterations to find the real cause, each one narrowing in after live testing disproved
+the previous fix:
+1. **First pass**: `.print-thermal` was hardcoded `width: 80mm` — added `Business.settings.
+   printWidthMm` (58/80, Settings → Receipt Paper Width) and two CSS width classes. Client
+   tried both settings — still clipped either way, proving the setting itself wasn't the gap.
+2. **Second pass**: found two compounding bugs neither of which the width *setting* could
+   fix — (a) the browser was never told the actual print **page size** (`@page size`), only the
+   printer driver's own default was used regardless of any CSS width, via a new
+   `useThermalPageSize` hook that injects a live `<style>@page{size}</style>` tag while a
+   thermal component is mounted; (b) a thermal printhead never reaches the paper edge (~48mm
+   printable on a 58mm roll, ~72mm on 80mm — the standard ESC/POS 8-dots/mm convention), so
+   content was still sized to the full nominal roll width. Still clipped after deploying.
+3. **Third pass — the actual fix**: the print-preview modal is `position:fixed`, and left alone
+   in `@media print` it stays the containing block for `.print-area`, so "100% width" was
+   resolving against the **browser viewport**, not the printed page. Also, printing to any
+   fixed mm width is inherently fragile — whether the browser's `@page size` or the printer
+   driver's own paper wins varies by driver. Final fix drops fixed-mm printing entirely:
+   `@media print` neutralises the fixed modal (`position:static`) so `.print-area` measures
+   against the real page, and thermal content renders at `width:100%` of whatever page that
+   turns out to be (cannot overflow a page it's measured against) with 8% side padding for the
+   printhead's unprintable margin. The mm-width classes/setting stay for the on-screen preview
+   only, so the shop still gets a rough idea of the roll size.
+- Verified each round with a live-site check (confirmed the deploy was actually live before
+  concluding a fix hadn't worked, measured `.print-thermal-80`'s actual computed width via
+  injected JS against the live site, read the compiled CSS out of `dist/` to confirm the
+  `@media print` overrides survived minification) rather than reasoning from source alone —
+  worth remembering for any future print-layout bug, since two of the three rounds looked
+  correct in isolation and only failed in the real print pipeline.
+
+### ✅ Phase 32 — Stock Transfer between branches (2026-08-25)
+Explicitly deferred at the end of Phase 25 ("moving stock between branches ... a real feature
+if the client wants it"). Sidebar's Branches entry now expands into **All Branches** (existing
+page) and **Stock Transfer** (new).
+- ✅ New `StockTransfer` model — deliberately has `fromBranch`/`toBranch` instead of the usual
+  single `branch` field (a transfer belongs to two branches at once). New
+  `stockTransferController`: since every branch keeps its own catalog (Phase 25), the same
+  physical model is two different `Product` documents, so a transfer resolves/creates the
+  destination branch's own product (barcode match first, then name+category case-insensitively
+  — same natural-identity keys Smart Import uses) rather than just editing a stock number.
+  Serial-tracked items move device-by-device — the chosen `PhoneUnit`s are re-homed
+  (branch + product both repointed) and stock is **re-derived** from in-stock unit counts on
+  both sides afterward, same rule `productController`/`phoneUnitController` already follow.
+  Quantity items decrement/increment directly. Whole thing runs in one transaction. Owner-only
+  routes, taking both branches explicitly (not via `resolveBranch`/`X-Branch-Id`) since this
+  screen deliberately reads a branch other than the one you're working in.
+- ✅ New `client/src/pages/StockTransfer.jsx` — from/to branch pickers (defaults to moving out
+  of the branch you're in), live search of the source branch's shelf, per-device IMEI
+  selection, quantity capped at what's actually there, transfer history + detail view. Scan
+  box + the Phase-30 phone scanner both tick the exact scanned device onto the transfer.
+- Verified: server import-chain + client build ✓; an 18-case logic fixture over the transfer
+  algorithm (destination matching precedence, quantity math, serial re-homing with stock
+  re-derived on both sides, a sold unit refused, over-transfer refused leaving stock untouched,
+  an A→B→A round trip restoring both branches with no duplicate products) — 18/18. Not
+  exercised against a live database — recommended the client do one small real transfer first
+  and confirm both branches' Products pages before moving anything valuable.
+
 ---
 
 ## 4. Cross-cutting decisions & conventions
@@ -662,6 +774,11 @@ Six freeform client issues (Bangla, no `next promt.txt` this round).
 - **2026-07-25** — **Phase 17 done.** Pharmacy POS is now fully keyboard-operable: the barcode/IMEI scan box is hidden for pharmacy shops (completing the earlier "no barcode system for pharmacy" decision), the product-name search gained an in-stock suggestion dropdown with ↑/↓ + Enter (adds to cart, clears the box, keeps focus for the next item), and Enter on an empty box walks focus through Customer Phone → Name → (NID) → Discount → Payment → Complete Sale button. Customer-phone suggestions became keyboard-navigable too (but never auto-attach a customer on a bare Enter); `PrintWrapper` closes on Esc and hands focus back to the search box so the next sale needs no mouse. Prevented a real hazard while building: the debounced product fetch could let Enter add the *previous* keystroke's match, so suggestions are now re-matched against the live search text. Client build verified; not run against the live production database. See §3 Phase 17.
 - **2026-08-11** — **Phase 28 done — session-3 fixes.** Modals no longer close on an outside click (shared `Modal.jsx` + `ConfirmContext.jsx`, so Admin Panel's Create Owner and Add Product are both covered); per-product **stock quantity button** (add/remove/set with a live preview, refused for serial-tracked items whose stock is derived from unit codes); **Money Back** on the invoice for handing back an overpayment (derived amount, own history, subtracted from the till by the balance engine, never touching stock/profit); new **Invoice Search** page + `GET /sales/search` (business-wide lookup, branch-scoped actions); supplier per-product **Sold is now net of returns** (it summed `items.qty`, which a return never reduces); and **EMI made a real sale**: product search-by-name + device picker + universal scan + inline customer creation (the barcode-only picker is why imported stock never linked or stocked out), plus a **Product Price + Extra Profit (৳ or %) = EMI Price** row of linked boxes for the credit markup, a cost basis on the plan, and profit recognised **payment by payment** through the new `services/emiService.js`, surfaced on the Dashboard and Advanced Report, with an editor to backfill the cost on older plans. See §3 Phase 28.
 - **2026-07-25** — **Phase 16 done.** New downloadable "Migration Template" (`GET /import/migration/template`) for shops moving from another system: product name + multiple IMEIs in one cell + buy/sell price + warranty + seller name. `smartImport.js` gained brand/storage/color/warranty/IMEIs field aliases. `classifyRows()` labels every row new / existing-add-IMEIs-only / conflict (an IMEI already used elsewhere) before anything is written; `smartImportPreview` returns the full per-row list instead of a sample; `smartImportCommit` takes a `skipRows` list so the owner can accept or decline each row individually — existing products are never overwritten, only given new IMEIs. `ImportExport.jsx`'s preview became a per-row checkbox table with status badges. Caught and fixed a real bug along the way: the template CSV builder didn't quote fields containing commas, which would have silently mis-split the multi-IMEI example on re-import. Server import-chain + client build verified; parser and the template-escaping fix both verified with direct round-trip tests.
+- **2026-08-15** — **Phase 29 done — Admin Panel data visibility.** Businesses table gained a Branches column + a `shopsWithBranches` overview stat; new per-shop data browser (`/admin/businesses/:id`, driven off the same model-registry scan `deleteBusiness` uses, so any model with a `business` path is automatically browsable); new exact per-shop MongoDB storage usage via `$bsonSize`, one aggregation per collection grouped by business (a manual "Calculate" button, not auto-run — it walks every document in the database). See §3 Phase 29.
+- **2026-08-15/16** — **Phase 30 done — "Scan with Phone".** Replaces the client's dependency on the third-party `barcodetopc.com` bridge: POS/Products show a QR code, any phone scans it with its own camera (no app install) and lands on a public in-app page that reads barcodes/IMEI in-browser and posts them back to a live session the connected tab polls — reusing the existing backend instead of a LAN-local WebSocket-bridge architecture that doesn't fit a hosted SaaS. After live client testing: made the connection persistent + app-wide (Topbar widget, `ScannerContext`, works for both POS and product entry, no timeout while in use) and fixed real scanning-quality bugs (center guide-line to pick between close-together barcodes, a proper "still in view" dedupe instead of resubmitting every ~1.5s, faster decode timing, auto-retry on a black first frame). The only phase verified with an actual phone rather than just logic fixtures. See §3 Phase 30.
+- **2026-08-25** — **Phase 31 done — thermal receipt clipping, the real fix (3 rounds).** Client's printed receipts were cut off on the right on every line. Round 1 (paper-width Setting) and round 2 (`@page size` + printable-vs-nominal roll width) both looked right in isolation but still clipped live — round 3 found why: the print-preview modal is `position:fixed`, so "100% width" in `@media print` was resolving against the browser viewport, not the page. Final fix stops printing to any fixed mm width at all — thermal content now renders at 100% of whatever page actually gets used, which cannot overflow it. Lesson for next time: verify a print-layout fix against the live deployed site (measure computed widths via injected JS, read the compiled CSS out of `dist/`), not just by reasoning from source — two of the three rounds here would have looked "done" without that. See §3 Phase 31.
+- **2026-08-25** — **Phase 32 done — Stock Transfer between branches.** The feature explicitly deferred at the end of Phase 25. New Sidebar sub-menu under Branches. Because each branch keeps its own catalog, a transfer isn't a stock-number edit — it resolves/creates the destination branch's own product, re-homes serial-tracked `PhoneUnit`s device-by-device with stock re-derived on both sides afterward, and decrements/increments quantity items directly, all in one transaction. New `StockTransfer.jsx` page with a device/barcode scan box (works with the Phase-30 phone scanner too) and transfer history. An 18-case logic fixture verified the algorithm end to end. See §3 Phase 32.
+- **2026-09-06** — **Hotfix — Pay Salary threw "Path `branch` is required".** Client reported the paid amount updated correctly but the request still failed. Root cause: Phase 25 made `Expense.branch` required, but the salary-payment code (Phase 13, pre-dating branches) never set it, and `employeeRoutes.js` never chained `resolveBranch` (Employee itself is business-wide by design, so nobody needed `req.branchId` there before) — `employee.save()` succeeded first, then the Expense validation threw, which is exactly the reported symptom. Fixed by chaining `resolveBranch` and passing `branch: req.branchId` into the Expense. While in there, also added the two things the client asked for alongside the bug report: **split/multi-tender salary payments** (one payment can be paid across several methods at once, same pattern as POS's split payment) and a **Salary Payment vs Advance** type toggle, both reflected on the printed `SalarySlip`. Verified with a 20-case logic fixture mirroring `paySalary`'s exact arithmetic, server import-chain, client build.
 
 ---
 
