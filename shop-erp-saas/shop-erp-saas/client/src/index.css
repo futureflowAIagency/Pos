@@ -5,13 +5,17 @@
 :root { color-scheme: light dark; }
 
 body {
-  @apply bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100;
+  /* A faint teal wash instead of flat gray/white — ties the content area to
+     the sidebar's teal+coral theme without competing with the white cards
+     that sit on top of it. Dark mode is left as-is (already has color via
+     the dark sidebar sitting right next to it). */
+  @apply bg-brand-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100;
   font-family: 'Inter', 'Hind Siliguri', system-ui, sans-serif;
 }
 
 /* Reusable component classes */
 @layer components {
-  .card { @apply bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700; }
+  .card { @apply bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-brand-100 dark:border-slate-700; }
   .btn { @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition focus:outline-none disabled:opacity-50; }
   .btn-primary { @apply btn bg-brand-600 text-white hover:bg-brand-700; }
   .btn-ghost { @apply btn bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600; }

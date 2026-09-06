@@ -6,7 +6,7 @@ export default function DataTable({ columns, rows, empty = 'No data found', rowK
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-slate-50 dark:bg-slate-700/50 text-left text-slate-500 dark:text-slate-300">
+            <tr className="bg-brand-50 dark:bg-slate-700/50 text-left text-slate-500 dark:text-slate-300">
               {columns.map((c) => (
                 <th key={c.key} className={`px-4 py-3 font-medium whitespace-nowrap ${c.className || ''}`}>{c.label}</th>
               ))}
