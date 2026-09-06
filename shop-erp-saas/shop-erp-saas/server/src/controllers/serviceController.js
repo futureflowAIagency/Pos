@@ -6,6 +6,7 @@ import { logActivity } from '../middleware/activityLogger.js';
 import ServiceJob, { SERVICE_STATUSES } from '../models/ServiceJob.js';
 
 const genJobNo = () => 'JOB-' + Date.now().toString().slice(-8) + '-' + Math.floor(Math.random() * 90 + 10);
+const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
 
 // @route GET /api/services?status=&search=
 export const getServiceJobs = asyncHandler(async (req, res) => {
@@ -50,6 +51,8 @@ export const createServiceJob = asyncHandler(async (req, res) => {
 
   const total = computeTotal(req.body);
   const profit = computeProfit(req.body);
+  const paidAtCreate = Number(req.body.paid) || 0;
+  const method = TENDERS.includes(req.body.paymentMethod) ? req.body.paymentMethod : 'cash';
   const job = await ServiceJob.create({
     ...req.body,
     business: req.businessId,
@@ -57,6 +60,10 @@ export const createServiceJob = asyncHandler(async (req, res) => {
     jobNo: genJobNo(),
     total,
     profit,
+    paymentMethod: method,
+    // seed the ledger with whatever was paid up front, so payments[] always
+    // sums to `paid` — Collect Due appends to this same ledger later.
+    payments: paidAtCreate > 0 ? [{ amount: paidAtCreate, method, date: new Date() }] : [],
     status: 'pending',
     statusHistory: [{ status: 'pending', at: new Date() }],
     createdBy: req.user._id,
@@ -70,13 +77,49 @@ export const updateServiceJob = asyncHandler(async (req, res) => {
   const job = await ServiceJob.findOne(branchFilter(req, { _id: req.params.id }));
   if (!job) throw new ApiError(404, 'Service job not found');
 
-  const fields = ['customerName', 'customerPhone', 'customer', 'deviceModel', 'imei', 'problem', 'budget', 'technician', 'serviceFee', 'partsCost', 'technicianCost', 'paid', 'paymentMethod'];
+  const paidChanged = req.body.paid !== undefined && Number(req.body.paid) !== job.paid;
+  const fields = ['customerName', 'customerPhone', 'customer', 'deviceModel', 'imei', 'problem', 'technician', 'serviceFee', 'partsCost', 'technicianCost', 'paid', 'paymentMethod'];
   fields.forEach((f) => { if (req.body[f] !== undefined) job[f] = req.body[f]; });
   job.total = computeTotal(req.body, job);
   job.profit = computeProfit(req.body, job);
+
+  // Editing `paid` directly is meant for correcting a mistake at entry time, not
+  // for taking a real payment (Collect Due is that path). Only safe to reconcile
+  // the ledger automatically when no real due-collection has happened yet (at
+  // most the seeded at-creation entry) — once a genuine Collect Due exists,
+  // touching payments[] here could misrepresent money that already changed
+  // hands, so it's left alone (same documented limitation as Sale.updateSale).
+  if (paidChanged && job.payments.length <= 1) {
+    const newPaid = Number(job.paid) || 0;
+    const method = TENDERS.includes(job.paymentMethod) ? job.paymentMethod : 'cash';
+    job.payments = newPaid > 0 ? [{ amount: newPaid, method, date: job.payments[0]?.date || new Date() }] : [];
+  }
+
   await job.save();
   await logActivity(req, { action: 'UPDATE_SERVICE_JOB', entity: 'ServiceJob', entityId: job._id });
   ok(res, { job }, 'Service job updated');
+});
+
+// @route POST /api/services/:id/collect-due  body: { amount, method }
+export const collectServiceDue = asyncHandler(async (req, res) => {
+  const pay = Number(req.body.amount);
+  if (!pay || pay <= 0) throw new ApiError(400, 'Enter a valid amount');
+
+  const job = await ServiceJob.findOne(branchFilter(req, { _id: req.params.id }));
+  if (!job) throw new ApiError(404, 'Service job not found');
+
+  const due = Math.max(0, (job.total || 0) - (job.paid || 0));
+  if (due <= 0) throw new ApiError(400, 'This job has no due remaining');
+  if (pay > due) throw new ApiError(400, `That's more than the remaining due (${due})`);
+
+  const method = TENDERS.includes(req.body.method) ? req.body.method : 'cash';
+  job.payments.push({ amount: pay, method, date: new Date() });
+  job.paid = (job.paid || 0) + pay;
+  job.paymentMethod = method; // legacy/display field — most recent tender
+  await job.save();
+
+  await logActivity(req, { action: 'COLLECT_SERVICE_DUE', entity: 'ServiceJob', entityId: job._id, meta: { amount: pay, method } });
+  ok(res, { job }, 'Due collected');
 });
 
 // @route PATCH /api/services/:id/status  body: { status }

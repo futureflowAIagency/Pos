@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Plus, Wrench, Trash2, Search, Printer } from 'lucide-react';
+import { Plus, Wrench, Trash2, Search, Printer, HandCoins } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import ServiceThermal from '../components/print/ServiceThermal.jsx';
+import ServiceDueReceipt from '../components/print/ServiceDueReceipt.jsx';
 import { taka, fmtDateTime } from '../utils/format.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useConfirm } from '../context/ConfirmContext.jsx';
@@ -17,7 +18,7 @@ const STATUS_BADGE = {
   completed: 'bg-blue-100 text-blue-700',
   delivered: 'bg-green-100 text-green-700',
 };
-const empty = { customerName: '', customerPhone: '', deviceModel: '', imei: '', problem: '', budget: 0, technician: '', serviceFee: 0, partsCost: 0, technicianCost: 0, paid: 0, paymentMethod: 'cash' };
+const empty = { customerName: '', customerPhone: '', deviceModel: '', imei: '', problem: '', technician: '', serviceFee: 0, partsCost: 0, technicianCost: 0, paid: 0, paymentMethod: 'cash' };
 
 export default function Services() {
   const confirm = useConfirm();
@@ -30,6 +31,12 @@ export default function Services() {
   const [editId, setEditId] = useState(null);
   // customer service invoice to print / reprint (unlimited times)
   const [printJob, setPrintJob] = useState(null);
+  // collect due — the job being paid down + the amount/method form + the
+  // resulting due receipt to print
+  const [dueModal, setDueModal] = useState(null);
+  const [dueAmount, setDueAmount] = useState('');
+  const [dueMethod, setDueMethod] = useState('cash');
+  const [dueReceipt, setDueReceipt] = useState(null);
 
   const load = async () => {
     const { data } = await api.get('/services', { params: { search, status: statusFilter || undefined } });
@@ -41,7 +48,7 @@ export default function Services() {
   const openEdit = (j) => {
     setForm({
       customerName: j.customerName, customerPhone: j.customerPhone || '', deviceModel: j.deviceModel || '',
-      imei: j.imei || '', problem: j.problem || '', budget: j.budget || 0, technician: j.technician || '',
+      imei: j.imei || '', problem: j.problem || '', technician: j.technician || '',
       serviceFee: j.serviceFee || 0, partsCost: j.partsCost || 0, technicianCost: j.technicianCost || 0,
       paid: j.paid || 0, paymentMethod: j.paymentMethod || 'cash',
     });
@@ -53,7 +60,7 @@ export default function Services() {
     if (!form.deviceModel.trim()) return toast.error('Device model is required');
     const payload = {
       ...form,
-      budget: +form.budget || 0, serviceFee: +form.serviceFee || 0, partsCost: +form.partsCost || 0,
+      serviceFee: +form.serviceFee || 0, partsCost: +form.partsCost || 0,
       technicianCost: +form.technicianCost || 0, paid: +form.paid || 0,
     };
     try {
@@ -62,6 +69,17 @@ export default function Services() {
         : await api.post('/services', payload);
       toast.success('Saved'); setModal(false); load();
       if (data?.data?.job) setPrintJob(data.data.job);
+    } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
+  };
+
+  const openDue = (j) => { setDueModal(j); setDueAmount(''); setDueMethod('cash'); };
+  const collectDue = async () => {
+    if (!(Number(dueAmount) > 0)) return toast.error('Enter a valid amount');
+    try {
+      const { data } = await api.post(`/services/${dueModal._id}/collect-due`, { amount: Number(dueAmount), method: dueMethod });
+      toast.success('Due collected');
+      setDueReceipt({ job: data.data.job, amount: Number(dueAmount), method: dueMethod });
+      setDueModal(null); load();
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
   };
 
@@ -122,6 +140,11 @@ export default function Services() {
           { key: 'actions', label: '', className: 'text-right', render: (r) => (
             <div className="flex justify-end gap-1">
               <button className="btn-ghost p-1.5" title="Print invoice" onClick={() => setPrintJob(r)}><Printer size={15} /></button>
+              <button
+                className="btn-ghost p-1.5 text-green-600" title="Collect due"
+                disabled={(r.total || 0) - (r.paid || 0) <= 0}
+                onClick={() => openDue(r)}
+              ><HandCoins size={15} /></button>
               <button className="btn-ghost text-xs" onClick={() => openEdit(r)}>Edit</button>
               <button className="btn-ghost p-1.5 text-red-500" onClick={() => del(r)}><Trash2 size={15} /></button>
             </div>
@@ -139,8 +162,7 @@ export default function Services() {
           <div><label className="label">Device Model</label><input className="input" value={form.deviceModel} onChange={set('deviceModel')} /></div>
           <div><label className="label">IMEI / Serial</label><input className="input" value={form.imei} onChange={set('imei')} /></div>
           <div className="col-span-2"><label className="label">Problem / Fault</label><input className="input" value={form.problem} onChange={set('problem')} /></div>
-          <div><label className="label">Customer Budget</label><input className="input" type="number" value={form.budget} onChange={set('budget')} /></div>
-          <div><label className="label">Technician</label><input className="input" value={form.technician} onChange={set('technician')} /></div>
+          <div className="col-span-2"><label className="label">Technician</label><input className="input" value={form.technician} onChange={set('technician')} /></div>
 
           <div className="col-span-2"><label className="label">Service Charge <span className="text-xs text-slate-400 font-normal">(what the customer is billed — shown on their invoice)</span></label><input className="input" type="number" value={form.serviceFee} onChange={set('serviceFee')} /></div>
 
@@ -150,7 +172,10 @@ export default function Services() {
             <div><label className="label">Technician Cost</label><input className="input" type="number" value={form.technicianCost} onChange={set('technicianCost')} /></div>
           </div>
 
-          <div><label className="label">Paid</label><input className="input" type="number" value={form.paid} onChange={set('paid')} /></div>
+          <div>
+            <label className="label">Paid {editId && <span className="text-xs text-slate-400 font-normal">(at creation — use "Collect Due" in the list for later payments)</span>}</label>
+            <input className="input" type="number" value={form.paid} onChange={set('paid')} />
+          </div>
           <div><label className="label">Payment Method</label>
             <select className="input" value={form.paymentMethod} onChange={set('paymentMethod')}>
               <option value="cash">Cash</option><option value="bank">Bank</option><option value="bkash">bKash</option>
@@ -168,9 +193,38 @@ export default function Services() {
         </div>
       </Modal>
 
+      {/* Collect due */}
+      <Modal open={!!dueModal} onClose={() => setDueModal(null)} title={`Collect Due — ${dueModal?.jobNo}`}
+        footer={<><button className="btn-ghost" onClick={() => setDueModal(null)}>Cancel</button><button className="btn-primary" onClick={collectDue}>Collect</button></>}>
+        <p className="text-sm mb-2">
+          Current due: <strong className="text-red-500">{taka(Math.max(0, (dueModal?.total || 0) - (dueModal?.paid || 0)))}</strong>
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="label mb-0">Amount to collect</label>
+              <button type="button" className="text-xs text-brand-600" onClick={() => setDueAmount(String(Math.max(0, (dueModal?.total || 0) - (dueModal?.paid || 0))))}>Pay full due</button>
+            </div>
+            <input className="input" type="number" value={dueAmount} onChange={(e) => setDueAmount(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Method</label>
+            <select className="input" value={dueMethod} onChange={(e) => setDueMethod(e.target.value)}>
+              <option value="cash">Cash</option><option value="bank">Bank</option><option value="bkash">bKash</option>
+              <option value="nagad">Nagad</option><option value="rocket">Rocket</option><option value="card">Card</option>
+            </select>
+          </div>
+        </div>
+      </Modal>
+
       {/* Customer service invoice — print / reprint */}
       <PrintWrapper open={!!printJob} onClose={() => setPrintJob(null)} title="Service Invoice">
         {printJob && <ServiceThermal job={printJob} business={business} />}
+      </PrintWrapper>
+
+      {/* Due payment receipt */}
+      <PrintWrapper open={!!dueReceipt} onClose={() => setDueReceipt(null)} title="Due Receipt">
+        {dueReceipt && <ServiceDueReceipt job={dueReceipt.job} amount={dueReceipt.amount} method={dueReceipt.method} business={business} />}
       </PrintWrapper>
     </div>
   );

@@ -16,7 +16,9 @@ const emptyMap = () => METHODS.reduce((m, k) => { m[k] = 0; return m; }, {});
 // Cumulative money-in/out per payment method → current balance per method.
 // Money IN  = sale at-sale `paid` — split across `payments[]` when present (multi-tender
 //           checkout), else the legacy single `paidVia` (includes exchange-created sales)
-//           + due collections (by method) + service job `paid` (by paymentMethod)
+//           + due collections (by method) + service job `payments[]` (split
+//           across methods when a job's bill was collected in parts, same
+//           pattern as Sale; legacy jobs with no payments[] fall back to `paid`+`paymentMethod`)
 //           + EMI down payments (by downPaymentMethod) + EMI instalment payments
 //           (by schedule.method) + funds added (by source) + transfers in (by toMethod)
 // Money OUT = expenses (by source) + supplier purchase/payment `paid` (by source)
@@ -34,7 +36,7 @@ export async function computeBalances(businessId, branchId = null) {
   const branchMatch = branchId ? { branch: new mongoose.Types.ObjectId(branchId) } : {};
 
   const [
-    splitSalesIn, legacySalesIn, dueIn, serviceIn, emiDownIn, emiScheduleIn,
+    splitSalesIn, legacySalesIn, dueIn, splitServiceIn, legacyServiceIn, emiDownIn, emiScheduleIn,
     fundsAddIn, fundsWithdrawOut, transfersIn, transfersOut,
     expOut, supplierOut, refundOut, moneyBackOut,
   ] = await Promise.all([
@@ -53,8 +55,16 @@ export async function computeBalances(businessId, branchId = null) {
       { $match: { business: bId, ...branchMatch } },
       { $group: { _id: { $ifNull: ['$method', 'cash'] }, amount: { $sum: '$amount' } } },
     ]),
+    // Service jobs with a payments[] ledger (every job created/collected-from
+    // since the ledger was added): unwind it, same pattern as Sale.payments[]
     ServiceJob.aggregate([
-      { $match: { business: bId, ...branchMatch } },
+      { $match: { business: bId, ...branchMatch, 'payments.0': { $exists: true } } },
+      { $unwind: '$payments' },
+      { $group: { _id: '$payments.method', amount: { $sum: '$payments.amount' } } },
+    ]),
+    // Legacy jobs with no payments[] recorded (pre-existing data) — fall back to paid+paymentMethod
+    ServiceJob.aggregate([
+      { $match: { business: bId, ...branchMatch, $or: [{ payments: { $exists: false } }, { payments: { $size: 0 } }] } },
       { $group: { _id: { $ifNull: ['$paymentMethod', 'cash'] }, amount: { $sum: '$paid' } } },
     ]),
     Installment.aggregate([
@@ -115,7 +125,8 @@ export async function computeBalances(businessId, branchId = null) {
   for (const r of splitSalesIn) if (r._id in inflow) inflow[r._id] += r.amount || 0;
   for (const r of legacySalesIn) if (r._id in inflow) inflow[r._id] += r.amount || 0;
   for (const r of dueIn) if (r._id in inflow) inflow[r._id] += r.amount || 0;
-  for (const r of serviceIn) if (r._id in inflow) inflow[r._id] += r.amount || 0;
+  for (const r of splitServiceIn) if (r._id in inflow) inflow[r._id] += r.amount || 0;
+  for (const r of legacyServiceIn) if (r._id in inflow) inflow[r._id] += r.amount || 0;
   for (const r of emiDownIn) if (r._id in inflow) inflow[r._id] += r.amount || 0;
   for (const r of emiScheduleIn) if (r._id in inflow) inflow[r._id] += r.amount || 0;
   for (const r of fundsAddIn) if (r._id in inflow) inflow[r._id] += r.amount || 0;
