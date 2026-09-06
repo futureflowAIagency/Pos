@@ -136,6 +136,16 @@ export default function Products() {
   // all of them), grouped purely by BRAND — no supplier at all — with a
   // running SL# per brand, plus today's total stock vs the last time this
   // report was printed on an earlier day.
+  //
+  // Most of this shop's catalog came in through Smart Import (Phase 14) with
+  // no `Product.brand` field ever set, so grouping on that field alone put
+  // almost everything into one giant "No Brand" bucket — every product's name
+  // already starts with its brand ("Samsung A17 5G...", "Motorola G85...",
+  // "Oppo A6x..."), so that's used as the fallback grouping key whenever the
+  // dedicated field is blank. Groups are ordered alphabetically (client's own
+  // "ABC serial" ask) rather than by quantity, and items within a group too,
+  // so every product actually belonging to one brand lands in one place.
+  const brandOf = (p) => p.brand?.trim() || p.name?.trim().split(/\s+/)[0] || '— No Brand —';
   const openBrandReport = async () => {
     setBrandReportLoading(true);
     try {
@@ -146,12 +156,15 @@ export default function Products() {
       const inStock = data.data.products.filter((p) => p.stock > 0);
       const byBrand = {};
       for (const p of inStock) {
-        const key = p.brand?.trim() || '— No Brand —';
-        (byBrand[key] ||= []).push(p);
+        (byBrand[brandOf(p)] ||= []).push(p);
       }
       const groups = Object.entries(byBrand)
-        .map(([brand, items]) => ({ brand, items, qty: items.reduce((s, i) => s + i.stock, 0) }))
-        .sort((a, b) => b.qty - a.qty);
+        .map(([brand, items]) => ({
+          brand,
+          items: [...items].sort((a, b) => a.name.localeCompare(b.name)),
+          qty: items.reduce((s, i) => s + i.stock, 0),
+        }))
+        .sort((a, b) => a.brand.localeCompare(b.brand));
       setBrandReport({ category: categoryFilter, groups, today: snap.data.today, lastDay: snap.data.lastDay });
       setBrandReportOpen(true);
     } catch (e) { toast.error(e.response?.data?.message || 'Failed to build stock report'); }
