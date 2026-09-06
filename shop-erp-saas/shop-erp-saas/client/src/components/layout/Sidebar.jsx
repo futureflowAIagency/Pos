@@ -116,16 +116,19 @@ export default function Sidebar({ open, onClose }) {
   return (
     <>
       {open && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={onClose} />}
-      <aside className={`no-print fixed lg:static z-50 h-full w-64 flex flex-col bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 transition-transform ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        <div className="flex items-center justify-between h-16 px-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
+      {/* A fixed dark-teal sidebar, independent of the app's own light/dark
+          theme toggle (that toggle still governs the content area) — the
+          client picked this teal + coral combination specifically. */}
+      <aside className={`no-print fixed lg:static z-50 h-full w-64 flex flex-col bg-brand-950 border-r border-brand-900 transition-transform ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+        <div className="flex items-center justify-between h-16 px-4 border-b border-brand-900 shrink-0">
           <div>
-            <h1 className="font-bold text-brand-600">{t('Shop ERP')}</h1>
-            <p className="text-xs text-slate-400 truncate max-w-[150px]">{business?.name || t('Workspace')}</p>
+            <h1 className="font-bold text-white">{t('Shop ERP')}</h1>
+            <p className="text-xs text-brand-300/70 truncate max-w-[150px]">{business?.name || t('Workspace')}</p>
             {branches.length > 1 && activeBranch && (
-              <p className="text-[11px] text-brand-500 truncate max-w-[150px]">{activeBranch.name}</p>
+              <p className="text-[11px] text-coral-300 truncate max-w-[150px]">{activeBranch.name}</p>
             )}
           </div>
-          <button onClick={onClose} className="lg:hidden btn-ghost p-1"><X size={18} /></button>
+          <button onClick={onClose} className="lg:hidden p-1 rounded-lg text-brand-200 hover:bg-brand-900"><X size={18} /></button>
         </div>
 
         <nav className="p-3 space-y-1 overflow-y-auto flex-1">
@@ -144,15 +147,15 @@ export default function Sidebar({ open, onClose }) {
                     onClick={() => setWarrantyOpen((o) => !o)}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
                       inWarrantySection
-                        ? 'text-brand-600 dark:text-brand-400'
-                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                        ? 'text-coral-300'
+                        : 'text-brand-100/90 hover:bg-brand-900/70 hover:text-white'
                     }`}
                   >
                     <ShieldQuestion size={18} /> {t('Warranty')}
                     <ChevronDown size={15} className={`ml-auto transition-transform ${warrantyOpen ? '' : '-rotate-90'}`} />
                   </button>
                   {warrantyOpen && (
-                    <div className="ml-4 pl-3 border-l border-slate-200 dark:border-slate-700 space-y-1 mt-1">
+                    <div className="ml-4 pl-3 border-l border-brand-800 space-y-1 mt-1">
                       <NavLink to="/warranty" className={navClass} onClick={onClose}>
                         <ShieldQuestion size={16} /> {t('Check Warranty')}
                       </NavLink>
@@ -174,15 +177,15 @@ export default function Sidebar({ open, onClose }) {
                     onClick={() => setBranchOpen((o) => !o)}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
                       inBranchSection
-                        ? 'text-brand-600 dark:text-brand-400'
-                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                        ? 'text-coral-300'
+                        : 'text-brand-100/90 hover:bg-brand-900/70 hover:text-white'
                     }`}
                   >
                     <Store size={18} /> {t('Branches')}
                     <ChevronDown size={15} className={`ml-auto transition-transform ${branchOpen ? '' : '-rotate-90'}`} />
                   </button>
                   {branchOpen && (
-                    <div className="ml-4 pl-3 border-l border-slate-200 dark:border-slate-700 space-y-1 mt-1">
+                    <div className="ml-4 pl-3 border-l border-brand-800 space-y-1 mt-1">
                       <NavLink to="/branches" className={navClass} onClick={onClose}>
                         <Store size={16} /> {t('All Branches')}
                       </NavLink>
@@ -199,18 +202,18 @@ export default function Sidebar({ open, onClose }) {
 
         {/* App version — bottom-left. Swaps to a clickable "relaunch to update"
             prompt once a newer commit is detected running on the server. */}
-        <div className="shrink-0 border-t border-slate-200 dark:border-slate-700 px-3 py-2 text-center">
+        <div className="shrink-0 border-t border-brand-900 px-3 py-2 text-center">
           {updateAvailable ? (
             <button
               onClick={() => location.reload()}
-              className="w-full flex items-center justify-center gap-1.5 text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline"
+              className="w-full flex items-center justify-center gap-1.5 text-xs font-semibold text-amber-300 hover:underline"
               title={t('A new version has been deployed — click to reload')}
             >
               <RefreshCw size={12} /> {t('Relaunch to update')}
             </button>
           ) : (
             <span
-              className="text-[11px] text-slate-400 dark:text-slate-500"
+              className="text-[11px] text-brand-400/70"
               title={current?.deployedAt ? fmtDateTime(current.deployedAt) : ''}
             >
               {current ? `v${current.version}` : '…'}
@@ -225,6 +228,6 @@ export default function Sidebar({ open, onClose }) {
 const navClass = ({ isActive }) =>
   `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
     isActive
-      ? 'bg-brand-600 text-white'
-      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+      ? 'bg-coral-600 text-white'
+      : 'text-brand-100/90 hover:bg-brand-900/70 hover:text-white'
   }`;

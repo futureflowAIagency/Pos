@@ -107,7 +107,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
           <StatCard icon={Banknote} label="Cash" value={taka(bal.cash || 0)} accent="green" />
           <StatCard icon={Landmark} label="Bank" value={taka(bal.bank || 0)} accent="brand" />
-          <StatCard icon={Smartphone} label="bKash" value={taka(bal.bkash || 0)} accent="brand" />
+          <StatCard icon={Smartphone} label="bKash" value={taka(bal.bkash || 0)} accent="coral" />
           <StatCard icon={Smartphone} label="Nagad" value={taka(bal.nagad || 0)} accent="amber" />
           <StatCard icon={Wallet} label="Rocket" value={taka(bal.rocket || 0)} accent="brand" />
           <StatCard icon={CreditCard} label="Card Collection" value={taka(bal.card || 0)} accent="brand" />

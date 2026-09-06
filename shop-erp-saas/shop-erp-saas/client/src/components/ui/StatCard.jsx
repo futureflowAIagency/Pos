@@ -4,6 +4,7 @@ export default function StatCard({ icon: Icon, label, value, sub, accent = 'bran
     green: 'bg-green-50 text-green-600 dark:bg-green-600/20 dark:text-green-300',
     red: 'bg-red-50 text-red-600 dark:bg-red-600/20 dark:text-red-300',
     amber: 'bg-amber-50 text-amber-600 dark:bg-amber-600/20 dark:text-amber-300',
+    coral: 'bg-coral-50 text-coral-600 dark:bg-coral-600/20 dark:text-coral-300',
   };
   return (
     <div className="card p-4 flex items-center gap-4">

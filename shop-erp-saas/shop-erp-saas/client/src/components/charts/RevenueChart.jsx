@@ -14,15 +14,15 @@ export default function RevenueChart({ data = [] }) {
         <AreaChart data={chartData}>
           <defs>
             <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.4} />
-              <stop offset="95%" stopColor="#4f46e5" stopOpacity={0} />
+              <stop offset="5%" stopColor="#0d9488" stopOpacity={0.4} />
+              <stop offset="95%" stopColor="#0d9488" stopOpacity={0} />
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke={grid} />
           <XAxis dataKey="date" stroke={text} fontSize={12} />
           <YAxis stroke={text} fontSize={12} />
           <Tooltip contentStyle={{ background: theme === 'dark' ? '#1e293b' : '#fff', border: `1px solid ${grid}`, borderRadius: 8, color: text }} />
-          <Area type="monotone" dataKey="revenue" stroke="#4f46e5" strokeWidth={2} fill="url(#rev)" name="Revenue" />
+          <Area type="monotone" dataKey="revenue" stroke="#0d9488" strokeWidth={2} fill="url(#rev)" name="Revenue" />
           <Area type="monotone" dataKey="profit" stroke="#16a34a" strokeWidth={2} fillOpacity={0} name="Profit" />
         </AreaChart>
       </ResponsiveContainer>
