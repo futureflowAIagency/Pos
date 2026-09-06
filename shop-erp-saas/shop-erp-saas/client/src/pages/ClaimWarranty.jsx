@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { ShieldQuestion, Search, CheckCircle2, ClipboardList, Printer, Trash2, Package, Send, PackageCheck } from 'lucide-react';
+import { ShieldQuestion, Search, CheckCircle2, ClipboardList, Printer, PackageOpen, Trash2, Package, Send, PackageCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
 import StatCard from '../components/ui/StatCard.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import WarrantyClaimReceipt from '../components/print/WarrantyClaimReceipt.jsx';
+import WarrantyDeliveryReceipt from '../components/print/WarrantyDeliveryReceipt.jsx';
 import { fmtDateTime } from '../utils/format.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useConfirm } from '../context/ConfirmContext.jsx';
@@ -55,6 +56,10 @@ export default function ClaimWarranty() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [printClaim, setPrintClaim] = useState(null);
+  // delivery confirmation receipt — auto-opens the moment a claim is marked
+  // Delivered to Customer, and stays reprintable from the list forever after
+  // (both receipts for a claim live on for later rechecking)
+  const [printDelivery, setPrintDelivery] = useState(null);
 
   const [claims, setClaims] = useState([]);
   const [search, setSearch] = useState('');
@@ -115,8 +120,14 @@ export default function ClaimWarranty() {
   };
 
   const changeStatus = async (c, status) => {
-    try { await api.patch(`/warranty-claims/${c._id}/status`, { status }); load(); loadSummary(); }
-    catch (e) { toast.error(e.response?.data?.message || 'Error'); }
+    try {
+      const { data } = await api.patch(`/warranty-claims/${c._id}/status`, { status });
+      load(); loadSummary();
+      // moving to Delivered means the product physically left the shop for
+      // the customer — print a confirmation right away, on file alongside the
+      // original claim receipt for a later recheck.
+      if (status === 'delivered_to_customer') setPrintDelivery(data.data.claim);
+    } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
   };
 
   const del = async (c) => {
@@ -196,7 +207,10 @@ export default function ClaimWarranty() {
           ) },
           { key: 'actions', label: '', className: 'text-right', render: (r) => (
             <div className="flex justify-end gap-1">
-              <button className="btn-ghost p-1.5" title="Print receipt" onClick={() => setPrintClaim(r)}><Printer size={15} /></button>
+              <button className="btn-ghost p-1.5" title="Print claim receipt" onClick={() => setPrintClaim(r)}><Printer size={15} /></button>
+              {r.status === 'delivered_to_customer' && (
+                <button className="btn-ghost p-1.5 text-green-600" title="Print delivery confirmation" onClick={() => setPrintDelivery(r)}><PackageOpen size={15} /></button>
+              )}
               <button className="btn-ghost p-1.5 text-red-500" onClick={() => del(r)}><Trash2 size={15} /></button>
             </div>
           ) },
@@ -207,6 +221,10 @@ export default function ClaimWarranty() {
 
       <PrintWrapper open={!!printClaim} onClose={() => setPrintClaim(null)} title="Warranty Claim Receipt">
         {printClaim && <WarrantyClaimReceipt claim={printClaim} business={business} />}
+      </PrintWrapper>
+
+      <PrintWrapper open={!!printDelivery} onClose={() => setPrintDelivery(null)} title="Delivery Confirmation">
+        {printDelivery && <WarrantyDeliveryReceipt claim={printDelivery} business={business} />}
       </PrintWrapper>
     </div>
   );
