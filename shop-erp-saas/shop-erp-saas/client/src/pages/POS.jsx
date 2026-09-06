@@ -6,6 +6,7 @@ import { taka, fmtDate, fmtDateTime, expiryStatus, daysUntil } from '../utils/fo
 import { useAuth } from '../context/AuthContext.jsx';
 import { useScanner } from '../context/ScannerContext.jsx';
 import Modal from '../components/ui/Modal.jsx';
+import AccountSelect from '../components/ui/AccountSelect.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import ThermalReceipt from '../components/print/ThermalReceipt.jsx';
 
@@ -426,9 +427,9 @@ export default function POS() {
     // the next day) — the server rejects it too, this just says so plainly.
     const expiredLine = cart.map(expiryBlock).find(Boolean);
     if (expiredLine) return toast.error(expiredLine);
-    const cleanPayments = payments.map((p) => ({ method: p.method, amount: Number(p.amount) || 0 })).filter((p) => p.amount > 0);
+    const cleanPayments = payments.map((p) => ({ method: p.method, amount: Number(p.amount) || 0, account: p.account || null })).filter((p) => p.amount > 0);
     // Nothing typed in any row → default to paying the full total via the first selected method.
-    const sendPayments = cleanPayments.length ? cleanPayments : [{ method: payments[0]?.method || 'cash', amount: total }];
+    const sendPayments = cleanPayments.length ? cleanPayments : [{ method: payments[0]?.method || 'cash', amount: total, account: payments[0]?.account || null }];
     // Customer phone/name are optional for every shop type (walk-in counter
     // sales). Only a sale that actually leaves a due needs someone to attach it
     // to — otherwise the money owed could never be collected. Uses the payments
@@ -725,23 +726,27 @@ export default function POS() {
             </div>
             <div className="space-y-2">
               {payments.map((p, i) => (
-                <div key={i} className="flex gap-1.5 items-center">
-                  <select className="input !w-28 shrink-0" value={p.method} onChange={(e) => setPaymentRow(i, 'method', e.target.value)}>
-                    <option value="cash">Cash</option><option value="bank">Bank</option>
-                    <option value="bkash">bKash</option><option value="nagad">Nagad</option>
-                    <option value="rocket">Rocket</option><option value="card">Card</option>
-                  </select>
-                  <input
-                    ref={i === 0 ? payAmountRef : null}
-                    className="input"
-                    type="number"
-                    placeholder={i === 0 ? String(total) : '0'}
-                    value={p.amount}
-                    onChange={(e) => setPaymentRow(i, 'amount', e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); checkoutRef.current?.focus(); } }}
-                  />
-                  <button type="button" className="btn-ghost p-1.5 shrink-0" title="Fill remaining" onClick={() => fillRemaining(i)}>=</button>
-                  {payments.length > 1 && <button type="button" className="text-red-500 p-1 shrink-0" onClick={() => removePaymentRow(i)}><Trash2 size={14} /></button>}
+                <div key={i} className="space-y-1">
+                  <div className="flex gap-1.5 items-center">
+                    <select className="input !w-28 shrink-0" value={p.method} onChange={(e) => setPaymentRow(i, 'method', e.target.value)}>
+                      <option value="cash">Cash</option><option value="bank">Bank</option>
+                      <option value="bkash">bKash</option><option value="nagad">Nagad</option>
+                      <option value="rocket">Rocket</option><option value="card">Card</option>
+                    </select>
+                    <input
+                      ref={i === 0 ? payAmountRef : null}
+                      className="input"
+                      type="number"
+                      placeholder={i === 0 ? String(total) : '0'}
+                      value={p.amount}
+                      onChange={(e) => setPaymentRow(i, 'amount', e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); checkoutRef.current?.focus(); } }}
+                    />
+                    <button type="button" className="btn-ghost p-1.5 shrink-0" title="Fill remaining" onClick={() => fillRemaining(i)}>=</button>
+                    {payments.length > 1 && <button type="button" className="text-red-500 p-1 shrink-0" onClick={() => removePaymentRow(i)}><Trash2 size={14} /></button>}
+                  </div>
+                  {/* which specific bank/bKash/Nagad/etc account this tender landed in — optional */}
+                  <AccountSelect method={p.method} value={p.account} onChange={(v) => setPaymentRow(i, 'account', v)} className="!py-1 text-xs" />
                 </div>
               ))}
             </div>

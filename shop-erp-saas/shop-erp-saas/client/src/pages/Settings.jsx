@@ -1,14 +1,24 @@
 import { useEffect, useState } from 'react';
-import { Save, Moon, Sun, ImagePlus, Trash2, KeyRound } from 'lucide-react';
+import { Save, Moon, Sun, ImagePlus, Trash2, KeyRound, Landmark, Plus, Pencil, Ban } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import { uploadImage } from '../api/upload.js';
 import Spinner from '../components/ui/Spinner.jsx';
+import Modal from '../components/ui/Modal.jsx';
+import DataTable from '../components/ui/DataTable.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
+import { useConfirm } from '../context/ConfirmContext.jsx';
+
+const ACCOUNT_METHODS = ['bank', 'bkash', 'nagad', 'rocket', 'card'];
+const METHOD_LABEL = { bank: 'Bank', bkash: 'bKash', nagad: 'Nagad', rocket: 'Rocket', card: 'Card' };
 
 export default function Settings() {
-  const { business, refresh } = useAuth();
+  const { business, refresh, user } = useAuth();
+  // Managing the shop's payment accounts is owner-level (same reasoning as
+  // Branches) — a staff login with the 'settings' module can still view this
+  // page, but shouldn't get write actions the server would 403 anyway.
+  const canManageAccounts = ['owner', 'superadmin'].includes(user?.role);
   const { theme, toggleTheme } = useTheme();
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -30,6 +40,52 @@ export default function Settings() {
       setCurrentPw(''); setNewPw(''); setConfirmPw('');
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
     setPwBusy(false);
+  };
+
+  // ---- Payment Accounts — the shop's named bank/bKash/Nagad/Rocket/card
+  // sub-accounts (e.g. 5-10 real bank accounts). Referenced by id from POS
+  // payments, Fund, Transfer, Expense and Collect Due wherever that method is
+  // chosen, so both the invoice and the Finance balance breakdown can say
+  // exactly WHICH account the money moved through. ----
+  const emptyAccount = { method: 'bank', name: '', accountNumber: '', note: '' };
+  const confirm = useConfirm();
+  const [accounts, setAccounts] = useState([]);
+  const [accountModal, setAccountModal] = useState(false);
+  const [accountForm, setAccountForm] = useState(emptyAccount);
+  const [editAccountId, setEditAccountId] = useState(null);
+  const [accountSaving, setAccountSaving] = useState(false);
+
+  const loadAccounts = async () => {
+    const { data } = await api.get('/payment-accounts');
+    setAccounts(data.data.accounts);
+  };
+  useEffect(() => { loadAccounts(); }, []);
+
+  const openNewAccount = () => { setAccountForm(emptyAccount); setEditAccountId(null); setAccountModal(true); };
+  const openEditAccount = (a) => {
+    setAccountForm({ method: a.method, name: a.name, accountNumber: a.accountNumber || '', note: a.note || '' });
+    setEditAccountId(a._id); setAccountModal(true);
+  };
+  const saveAccount = async () => {
+    if (!accountForm.name.trim()) return toast.error('Account name is required');
+    setAccountSaving(true);
+    try {
+      if (editAccountId) await api.put(`/payment-accounts/${editAccountId}`, accountForm);
+      else await api.post('/payment-accounts', accountForm);
+      toast.success('Saved'); setAccountModal(false); loadAccounts();
+    } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
+    setAccountSaving(false);
+  };
+  const toggleAccount = async (a) => {
+    if (a.isActive) {
+      const yes = await confirm({
+        title: 'Deactivate account?',
+        message: `"${a.name}" will no longer be selectable for new payments — it can be re-activated anytime, and past records that already reference it are unaffected.`,
+        confirmText: 'Deactivate', tone: 'danger',
+      });
+      if (!yes) return;
+    }
+    await api.patch(`/payment-accounts/${a._id}/toggle`); toast.success(a.isActive ? 'Deactivated' : 'Activated'); loadAccounts();
   };
 
   useEffect(() => {
@@ -151,6 +207,47 @@ export default function Settings() {
       </div>
 
       <button className="btn-primary" disabled={saving} onClick={save}><Save size={18} /> {saving ? 'Saving...' : 'Save Changes'}</button>
+
+      <div className="card p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold flex items-center gap-2"><Landmark size={16} /> Payment Accounts</h3>
+            <p className="text-xs text-slate-400 mt-1">Your shop's own named Bank / bKash / Nagad / Rocket / Card accounts (e.g. 5-10 real bank accounts). Pick one whenever you take a payment or move money, so invoices and Finance show exactly which account it went through.</p>
+          </div>
+          {canManageAccounts && <button className="btn-primary shrink-0" onClick={openNewAccount}><Plus size={16} /> Add Account</button>}
+        </div>
+        <DataTable
+          columns={[
+            { key: 'method', label: 'Method', render: (a) => <span className="badge bg-slate-100 dark:bg-slate-700">{METHOD_LABEL[a.method]}</span> },
+            { key: 'name', label: 'Name' },
+            { key: 'accountNumber', label: 'Account Number', render: (a) => a.accountNumber || '—' },
+            { key: 'isActive', label: 'Status', render: (a) => a.isActive ? <span className="text-green-600">Active</span> : <span className="text-slate-400">Inactive</span> },
+            ...(canManageAccounts ? [{ key: 'actions', label: '', className: 'text-right', render: (a) => (
+              <div className="flex justify-end gap-1">
+                <button className="btn-ghost p-1.5" onClick={() => openEditAccount(a)}><Pencil size={15} /></button>
+                <button className={`btn-ghost p-1.5 ${a.isActive ? 'text-red-500' : 'text-green-600'}`} title={a.isActive ? 'Deactivate' : 'Activate'} onClick={() => toggleAccount(a)}><Ban size={15} /></button>
+              </div>
+            ) }] : []),
+          ]}
+          rows={accounts}
+          empty="No payment accounts added yet — add your bank/bKash/Nagad accounts here."
+        />
+      </div>
+
+      <Modal open={accountModal} onClose={() => setAccountModal(false)} title={editAccountId ? 'Edit Payment Account' : 'Add Payment Account'}
+        footer={<><button className="btn-ghost" onClick={() => setAccountModal(false)}>Cancel</button><button className="btn-primary" disabled={accountSaving} onClick={saveAccount}>{accountSaving ? 'Saving...' : 'Save'}</button></>}>
+        <div className="space-y-3">
+          <div>
+            <label className="label">Method</label>
+            <select className="input" value={accountForm.method} onChange={(e) => setAccountForm({ ...accountForm, method: e.target.value })}>
+              {ACCOUNT_METHODS.map((m) => <option key={m} value={m}>{METHOD_LABEL[m]}</option>)}
+            </select>
+          </div>
+          <div><label className="label">Account Name</label><input className="input" placeholder="e.g. Dutch-Bangla — Current" value={accountForm.name} onChange={(e) => setAccountForm({ ...accountForm, name: e.target.value })} /></div>
+          <div><label className="label">Account / Agent Number</label><input className="input" value={accountForm.accountNumber} onChange={(e) => setAccountForm({ ...accountForm, accountNumber: e.target.value })} /></div>
+          <div><label className="label">Note (optional)</label><input className="input" value={accountForm.note} onChange={(e) => setAccountForm({ ...accountForm, note: e.target.value })} /></div>
+        </div>
+      </Modal>
 
       <div className="card p-5 space-y-4">
         <h3 className="font-semibold flex items-center gap-2"><KeyRound size={16} /> Change Password</h3>

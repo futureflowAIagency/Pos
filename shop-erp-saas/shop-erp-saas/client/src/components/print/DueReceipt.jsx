@@ -2,7 +2,7 @@ import { taka, fmtDateTime } from '../../utils/format.js';
 import { thermalWidthClass, thermalPageWidthMm } from '../../utils/printWidth.js';
 import { useThermalPageSize } from '../../utils/printPageSize.js';
 
-export default function DueReceipt({ customer, amount, method, business }) {
+export default function DueReceipt({ customer, amount, method, account, business }) {
   useThermalPageSize(thermalPageWidthMm(business));
   if (!customer) return null;
   return (
@@ -21,7 +21,7 @@ export default function DueReceipt({ customer, amount, method, business }) {
       </div>
       {method ? (
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>Method</span><span>{String(method).toUpperCase()}</span>
+          <span>Method</span><span>{String(method).toUpperCase()}{account?.name ? ` — ${account.name}` : ''}</span>
         </div>
       ) : null}
       <div style={{ display: 'flex', justifyContent: 'space-between' }}>

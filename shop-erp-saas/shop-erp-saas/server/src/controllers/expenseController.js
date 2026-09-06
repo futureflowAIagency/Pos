@@ -3,6 +3,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
 import { branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
+import { resolveAccountId } from '../utils/paymentAccounts.js';
 import Expense from '../models/Expense.js';
 
 export const getExpenses = asyncHandler(async (req, res) => {
@@ -13,12 +14,17 @@ export const getExpenses = asyncHandler(async (req, res) => {
     if (from) q.date.$gte = new Date(from);
     if (to) q.date.$lte = new Date(to + 'T23:59:59');
   }
-  const expenses = await Expense.find(q).sort('-date');
+  const expenses = await Expense.find(q).sort('-date').populate('account', 'name accountNumber');
   ok(res, { expenses, count: expenses.length });
 });
 
 export const createExpense = asyncHandler(async (req, res) => {
-  const expense = await Expense.create({ ...req.body, business: req.businessId, branch: req.branchId });
+  const expense = await Expense.create({
+    ...req.body,
+    business: req.businessId,
+    branch: req.branchId,
+    account: await resolveAccountId(req, req.body.account),
+  });
   await logActivity(req, { action: 'CREATE_EXPENSE', entity: 'Expense', entityId: expense._id });
   created(res, { expense });
 });

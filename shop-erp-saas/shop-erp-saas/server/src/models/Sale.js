@@ -26,9 +26,17 @@ const saleItemSchema = new mongoose.Schema(
   { _id: false }
 );
 
-// One tender line of a (possibly split) payment, e.g. { method: 'bkash', amount: 2000 }
+// One tender line of a (possibly split) payment, e.g. { method: 'bkash', amount: 2000 }.
+// `account` optionally names WHICH bank/bKash/Nagad/Rocket/card sub-account
+// this specific tender landed in — blank means "unassigned", which the older
+// balance-by-method view has always treated as fine (the method total is
+// unaffected either way; account is purely an additional tag).
 const paymentLineSchema = new mongoose.Schema(
-  { method: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' }, amount: { type: Number, default: 0 } },
+  {
+    method: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' },
+    amount: { type: Number, default: 0 },
+    account: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentAccount', default: null },
+  },
   { _id: false }
 );
 
@@ -40,6 +48,7 @@ const moneyBackSchema = new mongoose.Schema(
   {
     amount: { type: Number, default: 0 },
     method: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' },
+    account: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentAccount', default: null },
     note: { type: String, default: '' },
     date: { type: Date, default: Date.now },
     by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

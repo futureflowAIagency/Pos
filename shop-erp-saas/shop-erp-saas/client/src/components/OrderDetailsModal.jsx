@@ -3,6 +3,7 @@ import { Printer, Pencil, HandCoins, Undo2, Wallet } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import Modal from './ui/Modal.jsx';
+import AccountSelect from './ui/AccountSelect.jsx';
 import PrintWrapper from './print/PrintWrapper.jsx';
 import ThermalReceipt from './print/ThermalReceipt.jsx';
 import DuePaymentInvoice from './print/DuePaymentInvoice.jsx';
@@ -21,8 +22,8 @@ export default function OrderDetailsModal({ saleId, onClose, onChanged }) {
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState('view'); // view | edit | due | moneyback
   const [edit, setEdit] = useState({ discount: 0, paid: 0, paymentMethod: 'cash', customerName: '' });
-  const [dueForm, setDueForm] = useState({ amount: 0, method: 'cash' });
-  const [mbForm, setMbForm] = useState({ amount: 0, method: 'cash', note: '' });
+  const [dueForm, setDueForm] = useState({ amount: 0, method: 'cash', account: null });
+  const [mbForm, setMbForm] = useState({ amount: 0, method: 'cash', account: null, note: '' });
   const [reprint, setReprint] = useState(false);
   const [dueInvoice, setDueInvoice] = useState(null); // { sale, duePayment }
   const [showReturn, setShowReturn] = useState(false);
@@ -36,8 +37,8 @@ export default function OrderDetailsModal({ saleId, onClose, onChanged }) {
       setSale(s);
       setMoneyBack(mb);
       setEdit({ discount: s.discount, paid: s.paid, paymentMethod: TENDERS.includes(s.paidVia) ? s.paidVia : 'cash', customerName: s.customerName });
-      setDueForm({ amount: s.due, method: 'cash' });
-      setMbForm({ amount: mb, method: TENDERS.includes(s.paidVia) ? s.paidVia : 'cash', note: '' });
+      setDueForm({ amount: s.due, method: 'cash', account: null });
+      setMbForm({ amount: mb, method: TENDERS.includes(s.paidVia) ? s.paidVia : 'cash', account: null, note: '' });
     } catch (e) { toast.error(e.response?.data?.message || 'Failed to load order'); }
     setLoading(false);
   };
@@ -60,7 +61,7 @@ export default function OrderDetailsModal({ saleId, onClose, onChanged }) {
     const amt = Number(dueForm.amount);
     if (!amt || amt <= 0) return toast.error('Enter a valid amount');
     try {
-      const { data } = await api.post(`/sales/${saleId}/collect-due`, { amount: amt, method: dueForm.method });
+      const { data } = await api.post(`/sales/${saleId}/collect-due`, { amount: amt, method: dueForm.method, account: dueForm.account });
       toast.success('Due collected');
       setDueInvoice({ sale: data.data.sale, duePayment: data.data.duePayment });
       setMode('view'); await fetchSale(); onChanged?.();
@@ -71,7 +72,7 @@ export default function OrderDetailsModal({ saleId, onClose, onChanged }) {
     const amt = Number(mbForm.amount);
     if (!amt || amt <= 0) return toast.error('Enter a valid amount');
     try {
-      await api.post(`/sales/${saleId}/money-back`, { amount: amt, method: mbForm.method, note: mbForm.note });
+      await api.post(`/sales/${saleId}/money-back`, { amount: amt, method: mbForm.method, account: mbForm.account, note: mbForm.note });
       toast.success('Money given back to the customer');
       setMode('view'); await fetchSale(); onChanged?.();
     } catch (e) { toast.error(e.response?.data?.message || 'Could not give the money back'); }
@@ -133,11 +134,12 @@ export default function OrderDetailsModal({ saleId, onClose, onChanged }) {
               <div><label className="label">Amount to give back</label>
                 <input className="input" type="number" value={mbForm.amount} onChange={(e) => setMbForm({ ...mbForm, amount: e.target.value })} />
               </div>
-              <div><label className="label">Given back from</label>
-                <select className="input" value={mbForm.method} onChange={(e) => setMbForm({ ...mbForm, method: e.target.value })}>
+              <div className="space-y-1.5"><label className="label">Given back from</label>
+                <select className="input" value={mbForm.method} onChange={(e) => setMbForm({ ...mbForm, method: e.target.value, account: null })}>
                   <option value="cash">Cash</option><option value="bank">Bank</option><option value="bkash">bKash</option>
                   <option value="nagad">Nagad</option><option value="rocket">Rocket</option><option value="card">Card</option>
                 </select>
+                <AccountSelect method={mbForm.method} value={mbForm.account} onChange={(v) => setMbForm({ ...mbForm, account: v })} />
               </div>
             </div>
             <div><label className="label">Note (optional)</label>
@@ -153,11 +155,12 @@ export default function OrderDetailsModal({ saleId, onClose, onChanged }) {
             <p className="text-sm">Current due: <strong className="text-red-500">{taka(sale.due)}</strong></p>
             <div className="grid grid-cols-2 gap-3">
               <div><label className="label">Amount to collect</label><input className="input" type="number" value={dueForm.amount} onChange={(e) => setDueForm({ ...dueForm, amount: e.target.value })} /></div>
-              <div><label className="label">Method</label>
-                <select className="input" value={dueForm.method} onChange={(e) => setDueForm({ ...dueForm, method: e.target.value })}>
+              <div className="space-y-1.5"><label className="label">Method</label>
+                <select className="input" value={dueForm.method} onChange={(e) => setDueForm({ ...dueForm, method: e.target.value, account: null })}>
                   <option value="cash">Cash</option><option value="bank">Bank</option><option value="bkash">bKash</option>
                   <option value="nagad">Nagad</option><option value="rocket">Rocket</option><option value="card">Card</option>
                 </select>
+                <AccountSelect method={dueForm.method} value={dueForm.account} onChange={(v) => setDueForm({ ...dueForm, account: v })} />
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">
@@ -211,7 +214,7 @@ export default function OrderDetailsModal({ saleId, onClose, onChanged }) {
               <Row l="Discount" r={`-${taka(sale.discount)}`} />
               <Row l="Total" r={taka(sale.total)} bold />
               {sale.payments?.length > 1 ? (
-                sale.payments.map((p, i) => <Row key={i} l={`Paid (${p.method})`} r={taka(p.amount)} />)
+                sale.payments.map((p, i) => <Row key={i} l={`Paid (${p.method}${p.account?.name ? ` — ${p.account.name}` : ''})`} r={taka(p.amount)} />)
               ) : (
                 <Row l="Paid" r={taka(paidTotal)} />
               )}
@@ -233,7 +236,7 @@ export default function OrderDetailsModal({ saleId, onClose, onChanged }) {
                 )}
                 {sale.moneyBacks?.map((r, i) => (
                   <p key={i} className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    Given back {taka(r.amount)} ({r.method}) on {fmtDateTime(r.date)}{r.note ? ` — ${r.note}` : ''}
+                    Given back {taka(r.amount)} ({r.method}{r.account?.name ? ` — ${r.account.name}` : ''}) on {fmtDateTime(r.date)}{r.note ? ` — ${r.note}` : ''}
                   </p>
                 ))}
               </div>

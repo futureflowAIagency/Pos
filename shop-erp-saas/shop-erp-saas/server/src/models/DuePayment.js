@@ -13,6 +13,8 @@ const duePaymentSchema = new mongoose.Schema(
     sale: { type: mongoose.Schema.Types.ObjectId, ref: 'Sale', default: null },
     amount: { type: Number, required: true, default: 0 },
     method: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' },
+    // optionally WHICH named bank/bKash/Nagad/Rocket/card sub-account (blank = unassigned)
+    account: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentAccount', default: null },
     previousDue: { type: Number, default: 0 },   // due before this payment
     remainingDue: { type: Number, default: 0 },  // due after this payment
     note: { type: String, default: '' },

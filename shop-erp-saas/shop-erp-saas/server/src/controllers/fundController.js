@@ -3,6 +3,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
 import { branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
+import { resolveAccountId } from '../utils/paymentAccounts.js';
 import Fund from '../models/Fund.js';
 
 // @route GET /api/funds  — list fund entries (optionally by date range)
@@ -14,7 +15,7 @@ export const getFunds = asyncHandler(async (req, res) => {
     if (from) q.date.$gte = new Date(from);
     if (to) q.date.$lte = new Date(to + 'T23:59:59');
   }
-  const funds = await Fund.find(q).sort('-date').populate('addedBy', 'name');
+  const funds = await Fund.find(q).sort('-date').populate('addedBy', 'name').populate('account', 'name accountNumber');
   const total = funds.reduce((s, f) => s + (f.amount || 0), 0);
   ok(res, { funds, count: funds.length, total });
 });
@@ -22,12 +23,13 @@ export const getFunds = asyncHandler(async (req, res) => {
 // @route POST /api/funds  — add capital into a payment-method balance, or (type:'withdraw')
 // take part/all of previously-added capital back out. Neither is income or an expense.
 export const createFund = asyncHandler(async (req, res) => {
-  const { source = 'cash', type = 'add', amount, note = '', date } = req.body;
+  const { source = 'cash', type = 'add', amount, note = '', date, account } = req.body;
   if (!amount || Number(amount) <= 0) throw new ApiError(400, 'Amount must be greater than 0');
   const fund = await Fund.create({
     business: req.businessId,
     branch: req.branchId,
     source,
+    account: await resolveAccountId(req, account),
     type: type === 'withdraw' ? 'withdraw' : 'add',
     amount: Number(amount),
     note,

@@ -6,6 +6,7 @@ import StatCard from '../components/ui/StatCard.jsx';
 import DataTable from '../components/ui/DataTable.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import Spinner from '../components/ui/Spinner.jsx';
+import AccountSelect from '../components/ui/AccountSelect.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import AdvancedReport from '../components/print/AdvancedReport.jsx';
 import { taka, fmtDate } from '../utils/format.js';
@@ -21,15 +22,18 @@ export default function Finance() {
   const [period, setPeriod] = useState('daily');
   const [modal, setModal] = useState(false);
   const [printReport, setPrintReport] = useState(false);
-  const [form, setForm] = useState({ title: '', category: 'General', amount: 0, source: 'cash', note: '' });
+  const [form, setForm] = useState({ title: '', category: 'General', amount: 0, source: 'cash', account: null, note: '' });
   // fund (capital) state
   const [funds, setFunds] = useState([]);
   const [fundModal, setFundModal] = useState(false);
-  const [fundForm, setFundForm] = useState({ source: 'cash', type: 'add', amount: 0, note: '' });
-  // balance transfer state (move money between the shop's own payment methods)
+  const [fundForm, setFundForm] = useState({ source: 'cash', account: null, type: 'add', amount: 0, note: '' });
+  // balance transfer state (move money between the shop's own payment methods,
+  // optionally between two specific named accounts under the same method)
   const [transfers, setTransfers] = useState([]);
   const [transferModal, setTransferModal] = useState(false);
-  const [transferForm, setTransferForm] = useState({ fromMethod: 'bkash', toMethod: 'cash', amount: 0, note: '' });
+  const [transferForm, setTransferForm] = useState({ fromMethod: 'bkash', toMethod: 'cash', fromAccount: null, toAccount: null, amount: 0, note: '' });
+  // named bank/bKash/Nagad/etc account balances ("kon bank a koto taka ache")
+  const [accountBalances, setAccountBalances] = useState(null);
   // advanced report (req 8)
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
@@ -39,18 +43,20 @@ export default function Finance() {
   const [advLoading, setAdvLoading] = useState(false);
 
   const load = async () => {
-    const [s, e, r, f, tr] = await Promise.all([
+    const [s, e, r, f, tr, ab] = await Promise.all([
       api.get('/dashboard/summary'),
       api.get('/expenses'),
       api.get(`/sales/report?period=${period}`),
       api.get('/funds'),
       api.get('/transfers'),
+      api.get('/payment-accounts/balances'),
     ]);
     setSummary(s.data.data.summary);
     setExpenses(e.data.data.expenses);
     setReport(r.data.data.report);
     setFunds(f.data.data.funds);
     setTransfers(tr.data.data.transfers);
+    setAccountBalances(ab.data.data);
   };
   useEffect(() => { load(); }, [period]);
 
@@ -59,7 +65,7 @@ export default function Finance() {
       await api.post('/expenses', { ...form, amount: +form.amount });
       toast.success(t('Expense added'));
       setModal(false);
-      setForm({ title: '', category: 'General', amount: 0, source: 'cash', note: '' });
+      setForm({ title: '', category: 'General', amount: 0, source: 'cash', account: null, note: '' });
       load();
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
   };
@@ -71,22 +77,25 @@ export default function Finance() {
       await api.post('/funds', { ...fundForm, amount: +fundForm.amount });
       toast.success(fundForm.type === 'withdraw' ? t('Fund withdrawn') : t('Fund added'));
       setFundModal(false);
-      setFundForm({ source: 'cash', type: 'add', amount: 0, note: '' });
+      setFundForm({ source: 'cash', account: null, type: 'add', amount: 0, note: '' });
       load();
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
   };
   const delFund = async (id) => { if (!confirm('Delete?')) return; await api.delete(`/funds/${id}`); load(); };
 
-  const openFund = (type) => { setFundForm({ source: 'cash', type, amount: 0, note: '' }); setFundModal(true); };
+  const openFund = (type) => { setFundForm({ source: 'cash', account: null, type, amount: 0, note: '' }); setFundModal(true); };
 
   const saveTransfer = async () => {
     try {
       if (!(+transferForm.amount > 0)) return toast.error('Enter an amount');
-      if (transferForm.fromMethod === transferForm.toMethod) return toast.error('Choose two different methods');
+      const sameAccount = transferForm.fromAccount && transferForm.toAccount
+        ? transferForm.fromAccount === transferForm.toAccount
+        : !transferForm.fromAccount && !transferForm.toAccount;
+      if (transferForm.fromMethod === transferForm.toMethod && sameAccount) return toast.error('Choose two different methods or accounts');
       await api.post('/transfers', { ...transferForm, amount: +transferForm.amount });
       toast.success(t('Balance transferred'));
       setTransferModal(false);
-      setTransferForm({ fromMethod: 'bkash', toMethod: 'cash', amount: 0, note: '' });
+      setTransferForm({ fromMethod: 'bkash', toMethod: 'cash', fromAccount: null, toAccount: null, amount: 0, note: '' });
       load();
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
   };
@@ -125,6 +134,31 @@ export default function Finance() {
             {Object.entries(summary.balances).map(([k, v]) => (
               <div key={k} className="rounded-lg bg-slate-50 dark:bg-slate-800 p-2">
                 <p className="text-xs text-slate-400 capitalize">{k}</p>
+                <p className="font-semibold">{taka(v)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Named account balances — "kon bank a koto taka ache". Only accounts
+          that actually exist (Settings → Payment Accounts) show up here; the
+          per-method card above already covers shops with none set up. */}
+      {accountBalances?.accounts?.length > 0 && (
+        <div className="card p-4">
+          <h3 className="font-semibold mb-3">Bank / Mobile Banking Accounts</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+            {accountBalances.accounts.map((a) => (
+              <div key={a._id} className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3">
+                <p className="text-xs text-slate-400 capitalize">{a.method}{a.accountNumber ? ` • ${a.accountNumber}` : ''}</p>
+                <p className="font-medium text-sm truncate" title={a.name}>{a.name}</p>
+                <p className={`font-semibold ${a.balance < 0 ? 'text-red-500' : ''}`}>{taka(a.balance)}</p>
+              </div>
+            ))}
+            {Object.entries(accountBalances.unassigned || {}).filter(([, v]) => Math.abs(v) > 0.001).map(([m, v]) => (
+              <div key={`unassigned-${m}`} className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 border border-dashed border-slate-300 dark:border-slate-600">
+                <p className="text-xs text-slate-400 capitalize">{m}</p>
+                <p className="font-medium text-sm text-slate-400">General / Unassigned</p>
                 <p className="font-semibold">{taka(v)}</p>
               </div>
             ))}
@@ -182,7 +216,9 @@ export default function Finance() {
             columns={[
               { key: 'title', label: 'Title' },
               { key: 'category', label: 'Category' },
-              { key: 'source', label: 'From', render: (r) => <span className="capitalize">{r.source || 'cash'}</span> },
+              { key: 'source', label: 'From', render: (r) => (
+                <div><span className="capitalize">{r.source || 'cash'}</span>{r.account?.name && <div className="text-xs text-slate-400">{r.account.name}</div>}</div>
+              ) },
               { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
               { key: 'amount', label: 'Amount', className: 'text-right', render: (r) => <span className="text-red-500">{taka(r.amount)}</span> },
               { key: 'actions', label: '', className: 'text-right', render: (r) => (
@@ -205,7 +241,9 @@ export default function Finance() {
             { key: 'type', label: 'Type', render: (r) => (
               <span className={`badge ${r.type === 'withdraw' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{r.type === 'withdraw' ? 'Withdraw' : 'Add'}</span>
             )},
-            { key: 'source', label: 'Method', render: (r) => <span className="capitalize">{r.source}</span> },
+            { key: 'source', label: 'Method', render: (r) => (
+              <div><span className="capitalize">{r.source}</span>{r.account?.name && <div className="text-xs text-slate-400">{r.account.name}</div>}</div>
+            ) },
             { key: 'note', label: 'Note', render: (r) => r.note || '—' },
             { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
             { key: 'amount', label: 'Amount', className: 'text-right', render: (r) => (
@@ -226,8 +264,12 @@ export default function Finance() {
         </div>
         <DataTable
           columns={[
-            { key: 'fromMethod', label: 'From', render: (r) => <span className="capitalize">{r.fromMethod}</span> },
-            { key: 'toMethod', label: 'To', render: (r) => <span className="capitalize">{r.toMethod}</span> },
+            { key: 'fromMethod', label: 'From', render: (r) => (
+              <div><span className="capitalize">{r.fromMethod}</span>{r.fromAccount?.name && <div className="text-xs text-slate-400">{r.fromAccount.name}</div>}</div>
+            ) },
+            { key: 'toMethod', label: 'To', render: (r) => (
+              <div><span className="capitalize">{r.toMethod}</span>{r.toAccount?.name && <div className="text-xs text-slate-400">{r.toAccount.name}</div>}</div>
+            ) },
             { key: 'note', label: 'Note', render: (r) => r.note || '—' },
             { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
             { key: 'amount', label: 'Amount', className: 'text-right', render: (r) => taka(r.amount) },
@@ -252,12 +294,13 @@ export default function Finance() {
           <div className="grid grid-cols-2 gap-3">
             <div><label className="label">Amount</label><input className="input" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
             <div><label className="label">Paid From</label>
-              <select className="input" value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })}>
+              <select className="input" value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value, account: null })}>
                 <option value="cash">Cash</option><option value="bank">Bank</option><option value="bkash">bKash</option>
                 <option value="nagad">Nagad</option><option value="rocket">Rocket</option><option value="card">Card</option>
               </select>
             </div>
           </div>
+          <AccountSelect method={form.source} value={form.account} onChange={(v) => setForm({ ...form, account: v })} />
           <div><label className="label">Note</label><input className="input" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} /></div>
         </div>
       </Modal>
@@ -277,12 +320,13 @@ export default function Finance() {
           <div className="grid grid-cols-2 gap-3">
             <div><label className="label">Amount</label><input className="input" type="number" value={fundForm.amount} onChange={(e) => setFundForm({ ...fundForm, amount: e.target.value })} /></div>
             <div><label className="label">{fundForm.type === 'withdraw' ? 'Withdraw From' : 'Add To'}</label>
-              <select className="input" value={fundForm.source} onChange={(e) => setFundForm({ ...fundForm, source: e.target.value })}>
+              <select className="input" value={fundForm.source} onChange={(e) => setFundForm({ ...fundForm, source: e.target.value, account: null })}>
                 <option value="cash">Cash</option><option value="bank">Bank</option><option value="bkash">bKash</option>
                 <option value="nagad">Nagad</option><option value="rocket">Rocket</option><option value="card">Card</option>
               </select>
             </div>
           </div>
+          <AccountSelect method={fundForm.source} value={fundForm.account} onChange={(v) => setFundForm({ ...fundForm, account: v })} />
           <div><label className="label">Note</label><input className="input" value={fundForm.note} onChange={(e) => setFundForm({ ...fundForm, note: e.target.value })} placeholder="e.g. owner capital, loan" /></div>
         </div>
       </Modal>
@@ -292,8 +336,9 @@ export default function Finance() {
         <div className="space-y-3">
           <p className="text-xs text-slate-400">Move money between your own balances in one step — e.g. bKash ৳5,000 cashed out to Cash. Not income or expense; one balance goes down, the other goes up.</p>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">From</label>
-              <select className="input" value={transferForm.fromMethod} onChange={(e) => setTransferForm({ ...transferForm, fromMethod: e.target.value })}>
+            <div className="space-y-1.5">
+              <label className="label">From</label>
+              <select className="input" value={transferForm.fromMethod} onChange={(e) => setTransferForm({ ...transferForm, fromMethod: e.target.value, fromAccount: null })}>
                 <option value="cash">Cash ({taka(summary.balances?.cash || 0)})</option>
                 <option value="bank">Bank ({taka(summary.balances?.bank || 0)})</option>
                 <option value="bkash">bKash ({taka(summary.balances?.bkash || 0)})</option>
@@ -301,14 +346,18 @@ export default function Finance() {
                 <option value="rocket">Rocket ({taka(summary.balances?.rocket || 0)})</option>
                 <option value="card">Card ({taka(summary.balances?.card || 0)})</option>
               </select>
+              <AccountSelect method={transferForm.fromMethod} value={transferForm.fromAccount} onChange={(v) => setTransferForm({ ...transferForm, fromAccount: v })} />
             </div>
-            <div><label className="label">To</label>
-              <select className="input" value={transferForm.toMethod} onChange={(e) => setTransferForm({ ...transferForm, toMethod: e.target.value })}>
+            <div className="space-y-1.5">
+              <label className="label">To</label>
+              <select className="input" value={transferForm.toMethod} onChange={(e) => setTransferForm({ ...transferForm, toMethod: e.target.value, toAccount: null })}>
                 <option value="cash">Cash</option><option value="bank">Bank</option><option value="bkash">bKash</option>
                 <option value="nagad">Nagad</option><option value="rocket">Rocket</option><option value="card">Card</option>
               </select>
+              <AccountSelect method={transferForm.toMethod} value={transferForm.toAccount} onChange={(v) => setTransferForm({ ...transferForm, toAccount: v })} />
             </div>
           </div>
+          <p className="text-xs text-slate-400">Both sides can be the same method (e.g. Bank → Bank) as long as you pick two different named accounts.</p>
           <div><label className="label">Amount</label><input className="input" type="number" value={transferForm.amount} onChange={(e) => setTransferForm({ ...transferForm, amount: e.target.value })} /></div>
           <div><label className="label">Note</label><input className="input" value={transferForm.note} onChange={(e) => setTransferForm({ ...transferForm, note: e.target.value })} placeholder="e.g. cashed out at the counter" /></div>
         </div>

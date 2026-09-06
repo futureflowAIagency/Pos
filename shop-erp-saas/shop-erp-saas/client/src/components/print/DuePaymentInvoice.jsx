@@ -41,7 +41,7 @@ export default function DuePaymentInvoice({ sale, duePayment, business }) {
       <Line l="Total Price" r={taka(sale.total)} />
       <Line l="Previous Paid" r={taka(previousPaid)} />
       <Line l="Current Payment" r={taka(duePayment.amount)} bold />
-      <Line l="Payment Method" r={(duePayment.method || 'cash').toUpperCase()} />
+      <Line l="Payment Method" r={(duePayment.method || 'cash').toUpperCase() + (duePayment.account?.name ? ` — ${duePayment.account.name}` : '')} />
       <Line l="Remaining Due" r={taka(duePayment.remainingDue)} />
       <div className="thermal-divider" />
       <div style={{ textAlign: 'center', marginTop: 4 }}>

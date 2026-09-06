@@ -5,6 +5,7 @@ import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
+import AccountSelect from '../components/ui/AccountSelect.jsx';
 import DueReceipt from '../components/print/DueReceipt.jsx';
 import ThermalReceipt from '../components/print/ThermalReceipt.jsx';
 import { taka, fmtDate, fmtDateTime } from '../utils/format.js';
@@ -25,6 +26,7 @@ export default function Customers() {
   const [dueModal, setDueModal] = useState(null);
   const [dueAmount, setDueAmount] = useState(0);
   const [dueMethod, setDueMethod] = useState('cash');
+  const [dueAccount, setDueAccount] = useState(null);
   const [printDue, setPrintDue] = useState(null);
   // reprint a past invoice from a customer's history (unlimited times)
   const [printSale, setPrintSale] = useState(null);
@@ -61,10 +63,10 @@ export default function Customers() {
   const viewHistory = async (c) => { const { data } = await api.get(`/customers/${c._id}/history`); setHistory(data.data); };
   const collectDue = async () => {
     if (!(Number(dueAmount) > 0)) return toast.error('Enter a valid amount');
-    const { data } = await api.post(`/customers/${dueModal._id}/collect-due`, { amount: Number(dueAmount), method: dueMethod });
+    const { data } = await api.post(`/customers/${dueModal._id}/collect-due`, { amount: Number(dueAmount), method: dueMethod, account: dueAccount });
     toast.success('Due collected');
-    setPrintDue({ customer: data.data.customer, amount: data.data.duePayment.amount, method: dueMethod });
-    setDueModal(null); setDueAmount(0); setDueMethod('cash'); load();
+    setPrintDue({ customer: data.data.customer, amount: data.data.duePayment.amount, method: dueMethod, account: data.data.duePayment.account });
+    setDueModal(null); setDueAmount(0); setDueMethod('cash'); setDueAccount(null); load();
   };
 
   return (
@@ -149,19 +151,20 @@ export default function Customers() {
             <label className="label">Amount to collect</label>
             <input className="input" type="number" value={dueAmount} onChange={(e) => setDueAmount(e.target.value)} />
           </div>
-          <div>
+          <div className="space-y-1.5">
             <label className="label">Method</label>
-            <select className="input" value={dueMethod} onChange={(e) => setDueMethod(e.target.value)}>
+            <select className="input" value={dueMethod} onChange={(e) => { setDueMethod(e.target.value); setDueAccount(null); }}>
               <option value="cash">Cash</option><option value="bank">Bank</option><option value="bkash">bKash</option>
               <option value="nagad">Nagad</option><option value="rocket">Rocket</option><option value="card">Card</option>
             </select>
+            <AccountSelect method={dueMethod} value={dueAccount} onChange={setDueAccount} />
           </div>
         </div>
       </Modal>
 
       {/* Due receipt print */}
       <PrintWrapper open={!!printDue} onClose={() => setPrintDue(null)} title="Due Receipt">
-        {printDue && <DueReceipt customer={printDue.customer} amount={printDue.amount} method={printDue.method} business={business} />}
+        {printDue && <DueReceipt customer={printDue.customer} amount={printDue.amount} method={printDue.method} account={printDue.account} business={business} />}
       </PrintWrapper>
 
       {/* Invoice reprint from history */}

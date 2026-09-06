@@ -3,6 +3,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
 import { tenantFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
+import { resolveAccountId } from '../utils/paymentAccounts.js';
 import Customer from '../models/Customer.js';
 import Sale from '../models/Sale.js';
 import DuePayment from '../models/DuePayment.js';
@@ -41,7 +42,7 @@ export const customerHistory = asyncHandler(async (req, res) => {
   if (!customer) throw new ApiError(404, 'Customer not found');
   const [sales, duePayments] = await Promise.all([
     Sale.find(tenantFilter(req, { customer: customer._id })).sort('-createdAt').populate('soldBy', 'name'),
-    DuePayment.find(tenantFilter(req, { customer: customer._id })).sort('-date'),
+    DuePayment.find(tenantFilter(req, { customer: customer._id })).sort('-date').populate('account', 'name accountNumber method'),
   ]);
   ok(res, { customer, sales, duePayments });
 });
@@ -50,7 +51,7 @@ export const customerHistory = asyncHandler(async (req, res) => {
 // unpaid invoices oldest-first so each Sale.due updates in real time (req 4),
 // records a DuePayment (history + balance by method), and returns receipt data.
 export const collectDue = asyncHandler(async (req, res) => {
-  const { amount, method = 'cash' } = req.body;
+  const { amount, method = 'cash', account } = req.body;
   const amt = Number(amount || 0);
   if (amt <= 0) throw new ApiError(400, 'Enter a valid amount');
   const m = TENDERS.includes(method) ? method : 'cash';
@@ -78,9 +79,14 @@ export const collectDue = asyncHandler(async (req, res) => {
   await customer.save();
 
   const duePayment = await DuePayment.create({
-    business: req.businessId, customer: customer._id, sale: null,
-    amount: pay, method: m, previousDue, remainingDue: customer.totalDue, collectedBy: req.user._id,
+    // `branch` was missing here entirely — DuePayment.branch is required (Phase
+    // 25), and this route never chained resolveBranch, so every customer-level
+    // Collect Due threw a validation error after already reducing the due (the
+    // exact same class of bug the Pay Salary fix caught earlier this session).
+    business: req.businessId, branch: req.branchId, customer: customer._id, sale: null,
+    amount: pay, method: m, account: await resolveAccountId(req, account), previousDue, remainingDue: customer.totalDue, collectedBy: req.user._id,
   });
+  await duePayment.populate('account', 'name accountNumber method');
   await logActivity(req, { action: 'COLLECT_DUE', entity: 'Customer', entityId: customer._id, meta: { amount: pay, method: m } });
   ok(res, { customer, duePayment }, 'Due collected');
 });

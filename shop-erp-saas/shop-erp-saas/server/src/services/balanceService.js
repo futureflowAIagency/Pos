@@ -142,3 +142,73 @@ export async function computeBalances(businessId, branchId = null) {
   for (const m of METHODS) balances[m] = inflow[m] - outflow[m];
   return balances; // { cash, bank, bkash, nagad, rocket, card }
 }
+
+// Per-NAMED-ACCOUNT balance (e.g. each of the shop's 5-10 real bank accounts,
+// or several bKash/Nagad numbers), on top of the per-method totals above. Only
+// the flows that actually carry an `account` tag contribute here — an entry
+// recorded before this feature existed, or where the account was simply left
+// blank, still counts toward its method's overall balance (computeBalances)
+// but isn't attributable to one specific account, so it's excluded here rather
+// than guessed at.
+//
+// Deliberately covers the same money-movement set the client asked about:
+// Sale.payments[] (POS), Sale.moneyBacks[], Fund (add/withdraw), Transfer
+// (both sides), Expense, and DuePayment (Collect Due). Supplier purchases,
+// EMI/Installment payments and Service jobs do NOT carry an `account` field
+// yet — a deliberate scope decision, not an oversight; add it there the same
+// way if the client wants full coverage later.
+export async function computeAccountBalances(businessId, branchId = null) {
+  const bId = new mongoose.Types.ObjectId(businessId);
+  const branchMatch = branchId ? { branch: new mongoose.Types.ObjectId(branchId) } : {};
+
+  const [salesIn, fundIn, fundOut, transferIn, transferOut, dueIn, expOut, moneyBackOut] = await Promise.all([
+    Sale.aggregate([
+      { $match: { business: bId, ...branchMatch, 'payments.0': { $exists: true } } },
+      { $unwind: '$payments' },
+      { $match: { 'payments.account': { $ne: null } } },
+      { $group: { _id: '$payments.account', amount: { $sum: '$payments.amount' } } },
+    ]),
+    Fund.aggregate([
+      { $match: { business: bId, ...branchMatch, type: { $ne: 'withdraw' }, account: { $ne: null } } },
+      { $group: { _id: '$account', amount: { $sum: '$amount' } } },
+    ]),
+    Fund.aggregate([
+      { $match: { business: bId, ...branchMatch, type: 'withdraw', account: { $ne: null } } },
+      { $group: { _id: '$account', amount: { $sum: '$amount' } } },
+    ]),
+    Transfer.aggregate([
+      { $match: { business: bId, ...branchMatch, toAccount: { $ne: null } } },
+      { $group: { _id: '$toAccount', amount: { $sum: '$amount' } } },
+    ]),
+    Transfer.aggregate([
+      { $match: { business: bId, ...branchMatch, fromAccount: { $ne: null } } },
+      { $group: { _id: '$fromAccount', amount: { $sum: '$amount' } } },
+    ]),
+    DuePayment.aggregate([
+      { $match: { business: bId, ...branchMatch, account: { $ne: null } } },
+      { $group: { _id: '$account', amount: { $sum: '$amount' } } },
+    ]),
+    Expense.aggregate([
+      { $match: { business: bId, ...branchMatch, account: { $ne: null } } },
+      { $group: { _id: '$account', amount: { $sum: '$amount' } } },
+    ]),
+    Sale.aggregate([
+      { $match: { business: bId, ...branchMatch, 'moneyBacks.0': { $exists: true } } },
+      { $unwind: '$moneyBacks' },
+      { $match: { 'moneyBacks.account': { $ne: null } } },
+      { $group: { _id: '$moneyBacks.account', amount: { $sum: '$moneyBacks.amount' } } },
+    ]),
+  ]);
+
+  const net = {};
+  const apply = (rows, sign) => { for (const r of rows) { const k = String(r._id); net[k] = (net[k] || 0) + sign * (r.amount || 0); } };
+  apply(salesIn, 1);
+  apply(fundIn, 1);
+  apply(fundOut, -1);
+  apply(transferIn, 1);
+  apply(transferOut, -1);
+  apply(dueIn, 1);
+  apply(expOut, -1);
+  apply(moneyBackOut, -1);
+  return net; // { [accountId]: balance }
+}

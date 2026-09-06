@@ -9,6 +9,8 @@ const fundSchema = new mongoose.Schema(
     branch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     // which balance this fund lands in / is taken from
     source: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' },
+    // optionally WHICH named bank/bKash/Nagad/Rocket/card sub-account (blank = unassigned)
+    account: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentAccount', default: null },
     // 'add' = capital brought in, 'withdraw' = (partial or full) capital taken back out
     type: { type: String, enum: ['add', 'withdraw'], default: 'add' },
     amount: { type: Number, required: true, default: 0 },

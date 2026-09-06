@@ -9,6 +9,10 @@ const transferSchema = new mongoose.Schema(
     branch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     fromMethod: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], required: true },
     toMethod: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], required: true },
+    // optionally WHICH named sub-account on each side — e.g. moving money from
+    // one specific bank account to another (both fromMethod/toMethod = 'bank')
+    fromAccount: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentAccount', default: null },
+    toAccount: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentAccount', default: null },
     amount: { type: Number, required: true, default: 0 },
     note: { type: String, default: '' },
     date: { type: Date, default: Date.now },

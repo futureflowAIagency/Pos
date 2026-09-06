@@ -47,7 +47,9 @@ export default function ThermalReceipt({ sale, business }) {
       <Line l="Discount" r={taka(sale.discount)} />
       <Line l="TOTAL" r={taka(sale.total)} bold />
       {sale.payments?.length > 1 ? (
-        sale.payments.map((p, i) => <Line key={i} l={`Paid (${p.method})`} r={taka(p.amount)} />)
+        sale.payments.map((p, i) => <Line key={i} l={`Paid (${p.method}${p.account?.name ? ` — ${p.account.name}` : ''})`} r={taka(p.amount)} />)
+      ) : sale.payments?.length === 1 && sale.payments[0].account?.name ? (
+        <Line l={`Paid (${sale.payments[0].method} — ${sale.payments[0].account.name})`} r={taka(sale.total - sale.due)} />
       ) : (
         <Line l="Paid" r={taka(sale.total - sale.due)} />
       )}

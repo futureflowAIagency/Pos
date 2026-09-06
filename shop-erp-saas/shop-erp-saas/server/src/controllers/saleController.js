@@ -5,6 +5,7 @@ import { ok, created } from '../utils/apiResponse.js';
 import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import { expiredError } from '../utils/expiry.js';
+import { resolveAccountId } from '../utils/paymentAccounts.js';
 import Sale from '../models/Sale.js';
 import Product from '../models/Product.js';
 import Customer from '../models/Customer.js';
@@ -40,9 +41,16 @@ export const createSale = asyncHandler(async (req, res) => {
   // known: an unpaid balance must be attached to someone or it's untraceable.
 
   // Normalize the payment breakdown: drop zero/invalid lines, clamp to known tenders.
-  const cleanPayments = (Array.isArray(reqPayments) ? reqPayments : [])
-    .map((p) => ({ method: TENDERS.includes(p.method) ? p.method : 'cash', amount: Number(p.amount) || 0 }))
-    .filter((p) => p.amount > 0);
+  // `account` optionally names which specific bank/bKash/Nagad/etc sub-account
+  // this tender landed in — resolved/validated against this business, never
+  // trusted as-is.
+  const cleanPayments = (await Promise.all(
+    (Array.isArray(reqPayments) ? reqPayments : []).map(async (p) => ({
+      method: TENDERS.includes(p.method) ? p.method : 'cash',
+      amount: Number(p.amount) || 0,
+      account: await resolveAccountId(req, p.account),
+    }))
+  )).filter((p) => p.amount > 0);
   const paidTotal = cleanPayments.length ? cleanPayments.reduce((s, p) => s + p.amount, 0) : Number(paid) || 0;
 
   const session = await mongoose.startSession();
@@ -199,6 +207,7 @@ export const createSale = asyncHandler(async (req, res) => {
 
   await logActivity(req, { action: 'CREATE_SALE', entity: 'Sale', entityId: sale._id, meta: { invoiceNo: sale.invoiceNo, total: sale.total } });
   await sale.populate('soldBy', 'name'); // so the printed receipt can show "Sold by <name>" straight away
+  await sale.populate('payments.account', 'name accountNumber method');
   created(res, { sale });
 });
 
@@ -238,9 +247,11 @@ export const searchInvoices = asyncHandler(async (req, res) => {
 
 // @route GET /api/sales/:id  — full invoice + its due-payment history
 export const getSale = asyncHandler(async (req, res) => {
-  const sale = await Sale.findOne(invoiceScope(req, { _id: req.params.id })).populate('branch', 'name').populate('soldBy', 'name');
+  const sale = await Sale.findOne(invoiceScope(req, { _id: req.params.id }))
+    .populate('branch', 'name').populate('soldBy', 'name')
+    .populate('payments.account', 'name accountNumber method').populate('moneyBacks.account', 'name accountNumber method');
   if (!sale) throw new ApiError(404, 'Sale not found');
-  const duePayments = await DuePayment.find(tenantFilter(req, { sale: sale._id })).sort('date');
+  const duePayments = await DuePayment.find(tenantFilter(req, { sale: sale._id })).sort('date').populate('account', 'name accountNumber method');
   ok(res, { sale, duePayments, moneyBack: moneyBackOf(sale) });
 });
 
@@ -293,7 +304,7 @@ export const updateSale = asyncHandler(async (req, res) => {
 // body: { amount, method }. Records a DuePayment (history + balance), clears the
 // DUE badge when settled (req 4), and returns data for the due-payment invoice (req 11).
 export const collectSaleDue = asyncHandler(async (req, res) => {
-  const { amount, method = 'cash' } = req.body;
+  const { amount, method = 'cash', account } = req.body;
   const amt = Number(amount);
   if (!amt || amt <= 0) throw new ApiError(400, 'Enter a valid amount');
   const m = TENDERS.includes(method) ? method : 'cash';
@@ -316,8 +327,9 @@ export const collectSaleDue = asyncHandler(async (req, res) => {
 
   const duePayment = await DuePayment.create({
     business: req.businessId, branch: req.branchId, customer: sale.customer, sale: sale._id,
-    amount: pay, method: m, previousDue, remainingDue: sale.due, collectedBy: req.user._id,
+    amount: pay, method: m, account: await resolveAccountId(req, account), previousDue, remainingDue: sale.due, collectedBy: req.user._id,
   });
+  await duePayment.populate('account', 'name accountNumber method');
   await logActivity(req, { action: 'COLLECT_DUE', entity: 'Sale', entityId: sale._id, meta: { amount: pay, method: m } });
   ok(res, { sale, duePayment }, 'Due collected');
 });
@@ -333,7 +345,7 @@ export const moneyBackOf = (sale) =>
 // is NOT a Return/Exchange: no goods move, so stock, profit and the invoice total
 // are all left exactly as they are — only the till gives the money back.
 export const payMoneyBack = asyncHandler(async (req, res) => {
-  const { amount, method = 'cash', note = '' } = req.body;
+  const { amount, method = 'cash', note = '', account } = req.body;
   const amt = Number(amount);
   if (!Number.isFinite(amt) || amt <= 0) throw new ApiError(400, 'Enter a valid amount');
   const m = TENDERS.includes(method) ? method : 'cash';
@@ -345,9 +357,10 @@ export const payMoneyBack = asyncHandler(async (req, res) => {
   if (owed <= 0) throw new ApiError(400, 'This invoice has no money to give back');
   if (amt > owed + 0.001) throw new ApiError(400, `Only ${owed} was taken above the bill on this invoice`);
 
-  sale.moneyBacks.push({ amount: amt, method: m, note, date: new Date(), by: req.user._id });
+  sale.moneyBacks.push({ amount: amt, method: m, account: await resolveAccountId(req, account), note, date: new Date(), by: req.user._id });
   sale.moneyBackReturned = Math.round(((sale.moneyBackReturned || 0) + amt) * 100) / 100;
   await sale.save();
+  await sale.populate('moneyBacks.account', 'name accountNumber method');
 
   await logActivity(req, {
     action: 'MONEY_BACK', entity: 'Sale', entityId: sale._id,
