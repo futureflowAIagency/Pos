@@ -54,19 +54,34 @@ const genOpenAI = async (cfg, prompt, maxTokens) => {
 };
 
 // Groq is OpenAI-compatible — same shape, different host. Free tier, very fast.
+// Groq retired every plain llama-3.x chat model from its lineup (confirmed
+// directly against /v1/models — 'llama-3.3-70b-versatile' no longer exists at
+// all, which is what broke this: "The model does not exist or you do not have
+// access to it"); its lineup is now openai/gpt-oss-*, qwen, allam and the
+// agentic groq/compound models, so the default was moved to openai/gpt-oss-120b.
 const genGroq = async (cfg, prompt, maxTokens) => {
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: cfg.model || 'llama-3.3-70b-versatile',
+      model: cfg.model || 'openai/gpt-oss-120b',
       max_tokens: maxTokens,
+      // the gpt-oss family always reasons internally before answering — this
+      // app just wants the plain-text answer, not a chain-of-thought trace,
+      // so keep reasoning effort minimal (also leaves more of maxTokens free
+      // for the actual answer instead of being eaten by reasoning tokens).
+      reasoning_effort: 'low',
       messages: [{ role: 'user', content: prompt }],
     }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error?.message || `Groq responded ${res.status}`);
-  return (data.choices?.[0]?.message?.content || '').trim();
+  const msg = data.choices?.[0]?.message || {};
+  // a gpt-oss reply can end up entirely in `reasoning` instead of `content`
+  // (e.g. a tight maxTokens cuts the answer off before it starts) — fall back
+  // to whichever actually has text, so a technically-successful call never
+  // silently comes back empty and falls through to the next provider for no reason.
+  return (msg.content || msg.reasoning || '').trim();
 };
 
 // Google Gemini — free tier (key from aistudio.google.com).
@@ -100,7 +115,7 @@ const buildChain = (ai) => {
     chain.push({ provider: 'gemini', apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-2.0-flash' });
   }
   if (process.env.GROQ_API_KEY) {
-    chain.push({ provider: 'groq', apiKey: process.env.GROQ_API_KEY, model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile' });
+    chain.push({ provider: 'groq', apiKey: process.env.GROQ_API_KEY, model: process.env.GROQ_MODEL || 'openai/gpt-oss-120b' });
   }
   if (ai?.apiKey && ai?.provider && callers[ai.provider]) {
     chain.push({ provider: ai.provider, apiKey: ai.apiKey, model: ai.model });
