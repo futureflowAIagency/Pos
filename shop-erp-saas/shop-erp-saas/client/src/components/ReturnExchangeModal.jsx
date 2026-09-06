@@ -3,7 +3,10 @@ import { ScanLine } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import Modal from './ui/Modal.jsx';
+import PrintWrapper from './print/PrintWrapper.jsx';
+import ReturnReceipt from './print/ReturnReceipt.jsx';
 import { taka } from '../utils/format.js';
+import { useAuth } from '../context/AuthContext.jsx';
 
 const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
 const emptyNewItem = { product: null, name: '', price: 0, trackSerial: false, unit: null, imei1: '', qty: 1 };
@@ -14,12 +17,16 @@ const emptyNewItem = { product: null, name: '', price: 0, trackSerial: false, un
 //  - Exchange: pick a replacement item; the system auto-computes the price
 //    difference (customer pays more / gets a refund / store credit)
 export default function ReturnExchangeModal({ sale, onClose, onDone }) {
+  const { business } = useAuth();
   const [tab, setTab] = useState('return'); // 'return' | 'exchange'
   const [selected, setSelected] = useState({}); // { [lineIndex]: { qty, condition } }
   const [reason, setReason] = useState('');
   const [refundType, setRefundType] = useState('refund'); // 'refund' | 'store_credit'
   const [refundMethod, setRefundMethod] = useState('cash');
   const [saving, setSaving] = useState(false);
+  // once a return/exchange completes, hold its receipt here and print it
+  // before actually closing (onDone/onClose fire only once the receipt closes)
+  const [receipt, setReceipt] = useState(null); // { returnDoc, newSale? }
 
   // exchange-only state
   const [barcode, setBarcode] = useState('');
@@ -59,9 +66,10 @@ export default function ReturnExchangeModal({ sale, onClose, onDone }) {
     if (!items.length) return toast.error('Select at least one item to return');
     setSaving(true);
     try {
-      await api.post('/returns', { sale: sale._id, items, reason, refundType, refundMethod });
+      const { data } = await api.post('/returns', { sale: sale._id, items, reason, refundType, refundMethod });
       toast.success('Return processed');
-      onDone?.(); onClose();
+      onDone?.();
+      setReceipt({ returnDoc: data.data.return });
     } catch (e) { toast.error(e.response?.data?.message || 'Return failed'); }
     setSaving(false);
   };
@@ -101,16 +109,28 @@ export default function ReturnExchangeModal({ sale, onClose, onDone }) {
     if (newItem.trackSerial && !newItem.unit) return toast.error('Scan the replacement device IMEI');
     setSaving(true);
     try {
-      await api.post('/returns/exchange', {
+      const { data } = await api.post('/returns/exchange', {
         sale: sale._id, items, reason,
         newItems: [{ product: newItem.product, unit: newItem.unit, qty: newItem.trackSerial ? 1 : Number(newItem.qty || 1) }],
         paymentMethod, settlementType,
       });
       toast.success('Exchange completed');
-      onDone?.(); onClose();
+      onDone?.();
+      setReceipt({ returnDoc: data.data.return, newSale: data.data.newSale });
     } catch (e) { toast.error(e.response?.data?.message || 'Exchange failed'); }
     setSaving(false);
   };
+
+  // The receipt print preview replaces this whole modal once a return/exchange
+  // has actually gone through — closing the receipt is what finally closes out
+  // (onDone already fired above, right when the money/stock actually moved).
+  if (receipt) {
+    return (
+      <PrintWrapper open onClose={onClose} title="Return / Exchange Receipt">
+        <ReturnReceipt business={business} returnDoc={receipt.returnDoc} newSale={receipt.newSale} />
+      </PrintWrapper>
+    );
+  }
 
   return (
     <Modal open onClose={onClose} title={`Return / Exchange — ${sale.invoiceNo}`} size="xl"

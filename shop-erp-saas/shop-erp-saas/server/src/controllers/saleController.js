@@ -241,7 +241,7 @@ export const searchInvoices = asyncHandler(async (req, res) => {
     ],
   });
 
-  const sales = await Sale.find(q).sort('-createdAt').limit(30).populate('branch', 'name');
+  const sales = await Sale.find(q).sort('-createdAt').limit(30).populate('branch', 'name').populate('customer', 'name phone');
   ok(res, { sales, count: sales.length });
 });
 

@@ -46,6 +46,7 @@ export default function InvoiceSearch() {
     { key: 'customerName', label: 'Customer', render: (r) => (
       <div>
         <span>{r.customerName || 'Walk-in'}</span>
+        {r.customer?.phone && <div className="text-xs text-slate-400">{r.customer.phone}</div>}
         {branches?.length > 1 && r.branch?.name && <div className="text-xs text-brand-500">{r.branch.name}</div>}
       </div>
     )},
