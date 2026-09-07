@@ -9,6 +9,7 @@ import Customer from '../models/Customer.js';
 import Supplier from '../models/Supplier.js';
 import { computeBalances } from '../services/balanceService.js';
 import { recogniseEmiProfit, findPlansInRange } from '../services/emiService.js';
+import { canViewBuyPrice } from '../utils/buyPrice.js';
 
 // @route GET /api/reports/advanced?from=&to=
 // A single comprehensive, date-ranged report (req 8): sales/purchase/profit/expense
@@ -65,12 +66,18 @@ export const advancedReport = asyncHandler(async (req, res) => {
 
   const supplierDue = suppliers.reduce((s, x) => s + Math.max(0, (x.totalPurchase || 0) - (x.totalPaid || 0)), 0);
 
+  // A per-product stock value is stock × purchase price — divide it back out
+  // and you have the exact buy price. Same for a per-product profit line next
+  // to its revenue and qty. So both are blanked for a staff login without
+  // 'view-buy-price'; the shop-level totals this report exists for are left
+  // alone (they're what the 'finance' module already grants).
+  const showCost = canViewBuyPrice(req);
   const stockItems = products.map((p) => ({
     name: p.name,
     category: p.category,
     stock: p.stock,
     lowStockAlert: p.lowStockAlert,
-    stockValue: Math.round((p.stock || 0) * (p.purchasePrice || 0) * 100) / 100,
+    stockValue: showCost ? Math.round((p.stock || 0) * (p.purchasePrice || 0) * 100) / 100 : null,
   }));
   const stockTotals = stockItems.reduce((acc, it) => {
     acc.totalQty += it.stock || 0;
@@ -78,6 +85,10 @@ export const advancedReport = asyncHandler(async (req, res) => {
     if (it.stock <= it.lowStockAlert) acc.lowStockCount += 1;
     return acc;
   }, { totalQty: 0, totalValue: 0, lowStockCount: 0 });
+  if (!showCost) {
+    stockTotals.totalValue = null;
+    for (const row of productWise) row.profit = null;
+  }
 
   const totalSales = salesAgg[0]?.total || 0;
   const totalProfit = salesAgg[0]?.profit || 0;

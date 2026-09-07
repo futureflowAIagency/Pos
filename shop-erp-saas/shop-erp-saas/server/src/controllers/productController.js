@@ -4,6 +4,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
 import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
+import { canViewBuyPrice, hideBuyPrice } from '../utils/buyPrice.js';
 import Product from '../models/Product.js';
 import PhoneUnit from '../models/PhoneUnit.js';
 import Supplier from '../models/Supplier.js';
@@ -14,16 +15,9 @@ import StockSnapshot from '../models/StockSnapshot.js';
 const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// Owner/superadmin always see the purchase/buy price; a staff login needs the
-// 'view-buy-price' permission explicitly — separate from having Products
-// access itself, since an owner may want staff to manage stock without
-// seeing what it actually cost.
-const canViewBuyPrice = (req) => req.user.role !== 'staff' || (req.user.permissions || []).includes('view-buy-price');
-// Redacts purchasePrice on a plain object (call .toObject()/.toJSON() on a
-// Mongoose doc first) — null rather than deleting the key, so the client's
-// shape stays predictable (a missing vs. hidden field would otherwise look
-// the same as "not set" everywhere the UI checks for it).
-const hideBuyPrice = (obj) => { obj.purchasePrice = null; return obj; };
+// `canViewBuyPrice` / `hideBuyPrice` now live in utils/buyPrice.js — the same
+// gate is needed by the exports, the advanced report and the dashboard, which
+// all hand back product documents of their own.
 
 // Generate a barcode value that's unique within the active branch's catalog.
 const genBarcodeValue = () => String(Date.now()).slice(-9) + String(Math.floor(Math.random() * 900 + 100));
@@ -69,7 +63,11 @@ export const getProductByBarcode = asyncHandler(async (req, res) => {
   if (!code) throw new ApiError(400, 'Barcode is required');
   const product = await Product.findOne(branchFilter(req, { barcode: code, isActive: true }));
   if (!product) throw new ApiError(404, 'No product found for this barcode');
-  ok(res, { product });
+  // Same buy-price gate as the Products list — this is the route a counter
+  // staff member actually uses all day (every scan), so leaving it open would
+  // make the whole "View Buy Price" toggle pointless for exactly the people
+  // it's meant to restrict.
+  ok(res, { product: canViewBuyPrice(req) ? product : hideBuyPrice(product.toObject()) });
 });
 
 // @route POST /api/products

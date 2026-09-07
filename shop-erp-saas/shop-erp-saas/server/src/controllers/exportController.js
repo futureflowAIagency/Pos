@@ -4,6 +4,7 @@ import { ok } from '../utils/apiResponse.js';
 import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import { toCSV } from '../utils/csv.js';
+import { canViewBuyPrice } from '../utils/buyPrice.js';
 import ImportExportLog from '../models/ImportExportLog.js';
 
 import Product from '../models/Product.js';
@@ -56,17 +57,27 @@ const ENTITY_BUILDERS = {
       { key: 'due', label: 'Due', value: (r) => Math.max(0, (r.totalPurchase || 0) - (r.totalPaid || 0)) },
     ],
   }),
-  products: async (req) => ({
-    rows: await Product.find(scoped(req)).lean(),
-    columns: [
-      { key: 'name', label: 'Name' }, { key: 'barcode', label: 'Barcode' }, { key: 'sku', label: 'SKU' },
-      { key: 'category', label: 'Category' }, { key: 'unit', label: 'Unit' },
-      { key: 'purchasePrice', label: 'Purchase Price' }, { key: 'sellingPrice', label: 'Selling Price' }, { key: 'discountPercent', label: 'Discount %' },
-      { key: 'stock', label: 'Stock' }, { key: 'lowStockAlert', label: 'Low Stock Alert' },
-      { key: 'trackSerial', label: 'Track Serial' }, { key: 'brand', label: 'Brand' }, { key: 'color', label: 'Color' }, { key: 'storage', label: 'Storage' },
-      { key: 'returnable', label: 'Returnable' },
-    ],
-  }),
+  products: async (req) => {
+    // A staff login without 'view-buy-price' must not get the cost back through
+    // a download either — strip it from the rows themselves (the JSON format
+    // returns raw rows and ignores `columns`, so dropping the column alone
+    // would not be enough) and drop the column from the CSV.
+    const show = canViewBuyPrice(req);
+    const rows = await Product.find(scoped(req)).lean();
+    if (!show) for (const r of rows) r.purchasePrice = null;
+    return {
+      rows,
+      columns: [
+        { key: 'name', label: 'Name' }, { key: 'barcode', label: 'Barcode' }, { key: 'sku', label: 'SKU' },
+        { key: 'category', label: 'Category' }, { key: 'unit', label: 'Unit' },
+        ...(show ? [{ key: 'purchasePrice', label: 'Purchase Price' }] : []),
+        { key: 'sellingPrice', label: 'Selling Price' }, { key: 'discountPercent', label: 'Discount %' },
+        { key: 'stock', label: 'Stock' }, { key: 'lowStockAlert', label: 'Low Stock Alert' },
+        { key: 'trackSerial', label: 'Track Serial' }, { key: 'brand', label: 'Brand' }, { key: 'color', label: 'Color' }, { key: 'storage', label: 'Storage' },
+        { key: 'returnable', label: 'Returnable' },
+      ],
+    };
+  },
   units: async (req) => ({
     rows: await PhoneUnit.find(scoped(req)).populate('product', 'name').lean(),
     columns: [
@@ -78,25 +89,43 @@ const ENTITY_BUILDERS = {
   sales: async (req) => {
     const range = dateRange(req);
     const q = scoped(req); if (range) q.createdAt = range;
+    // Every sale line snapshots the item's `purchasePrice`, and the sale's
+    // `profit` gives the cost away just as directly (cost = sold − profit) —
+    // both are stripped for a staff login without 'view-buy-price'.
+    const show = canViewBuyPrice(req);
+    const rows = await Sale.find(q).sort('-createdAt').lean();
+    if (!show) {
+      for (const r of rows) {
+        r.profit = null;
+        for (const i of r.items || []) i.purchasePrice = null;
+      }
+    }
     return {
-      rows: await Sale.find(q).sort('-createdAt').lean(),
+      rows,
       columns: [
         { key: 'invoiceNo', label: 'Invoice' }, { key: 'createdAt', label: 'Date' }, { key: 'customerName', label: 'Customer' },
         { key: 'items', label: 'Items', value: (r) => r.items.map((i) => `${i.name} x${i.qty}`).join('; ') },
         { key: 'subTotal', label: 'Subtotal' }, { key: 'discount', label: 'Discount' }, { key: 'total', label: 'Total' },
-        { key: 'paid', label: 'Paid' }, { key: 'due', label: 'Due' }, { key: 'paymentMethod', label: 'Payment Method' }, { key: 'profit', label: 'Profit' },
+        { key: 'paid', label: 'Paid' }, { key: 'due', label: 'Due' }, { key: 'paymentMethod', label: 'Payment Method' },
+        ...(show ? [{ key: 'profit', label: 'Profit' }] : []),
       ],
     };
   },
   purchases: async (req) => {
     const range = dateRange(req);
     const q = scoped(req, { kind: 'purchase' }); if (range) q.createdAt = range;
+    // A purchase line's `unitCost` IS the buy price, and the memo total is the
+    // same figure summed — a restricted staff login gets neither.
+    const show = canViewBuyPrice(req);
+    const rows = await Purchase.find(q).sort('-createdAt').populate('supplier', 'name').lean();
+    if (!show) for (const r of rows) for (const i of r.items || []) i.unitCost = null;
     return {
-      rows: await Purchase.find(q).sort('-createdAt').populate('supplier', 'name').lean(),
+      rows,
       columns: [
         { key: 'createdAt', label: 'Date' }, { key: 'supplier', label: 'Supplier', value: (r) => r.supplier?.name || '' }, { key: 'reference', label: 'Reference' },
         { key: 'items', label: 'Items', value: (r) => r.items.map((i) => `${i.name} x${i.qty}`).join('; ') },
-        { key: 'total', label: 'Total' }, { key: 'paid', label: 'Paid' }, { key: 'due', label: 'Due' }, { key: 'source', label: 'Paid From' },
+        ...(show ? [{ key: 'total', label: 'Total' }] : []),
+        { key: 'paid', label: 'Paid' }, { key: 'due', label: 'Due' }, { key: 'source', label: 'Paid From' },
       ],
     };
   },
@@ -152,6 +181,14 @@ export const exportEntity = asyncHandler(async (req, res) => {
 
 // @route GET /api/export/backup/full — complete business data dump (JSON, req 13 "System Backup/Migration")
 export const fullBackup = asyncHandler(async (req, res) => {
+  // A full backup is a raw dump of every collection — Product.purchasePrice,
+  // every Sale line's purchasePrice, Purchase.items[].unitCost and
+  // Installment.purchasePrice all carry the shop's cost, and a backup that had
+  // them stripped would silently be useless to restore from. So rather than
+  // redact it, a staff login without 'view-buy-price' simply can't take one.
+  if (!canViewBuyPrice(req)) {
+    throw new ApiError(403, 'A full backup includes purchase/cost data. Ask the shop owner to download it, or ask for the "View Buy Price" permission.');
+  }
   // A full backup spans every branch (it's the whole business account) —
   // business-wide on purpose, unlike the per-entity exports above.
   const q = tenantFilter(req);

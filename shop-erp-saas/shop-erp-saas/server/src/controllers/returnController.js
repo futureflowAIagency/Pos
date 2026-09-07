@@ -95,6 +95,19 @@ async function processReturnItems(req, session, sale, requestedItems) {
   const dueReduction = Math.min(sale.due, returnValue);
   sale.due -= dueReduction;
 
+  // Whatever the return is worth beyond the unpaid due came out of money the
+  // customer had ALREADY paid — it goes back to them as a refund, store credit
+  // or an exchange credit (the caller decides which). `paid` stays untouched on
+  // purpose: it records the cash the till really took in, and the balance
+  // engine reads it for legacy single-tender sales, so lowering it here would
+  // subtract the refund twice (once here, once via Return.cashRefund). Instead
+  // the returned-to-customer portion is banked in `returnCredit`, which
+  // moneyBackOf() subtracts — otherwise `paid − total` would read as an
+  // overpayment the shop still owes and the invoice would offer a second,
+  // unowed "Money Back" payout for the same money.
+  const paidCredit = Math.max(0, returnValue - dueReduction);
+  sale.returnCredit = Math.round(((sale.returnCredit || 0) + paidCredit) * 100) / 100;
+
   return { returnValue, dueReduction, returnDocItems };
 }
 

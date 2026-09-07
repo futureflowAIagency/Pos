@@ -82,10 +82,20 @@ const saleSchema = new mongoose.Schema(
     // Empty for older/legacy single-tender sales — those fall back to paid+paidVia.
     payments: { type: [paymentLineSchema], default: [] },
     // ---- money back: overpayment still held for the customer ----
-    // Outstanding money back = paid − total − moneyBackReturned (always derived,
-    // never stored, so editing the invoice's amounts can't leave it stale).
+    // Outstanding money back = paid − total − moneyBackReturned − returnCredit
+    // (always derived, never stored, so editing the invoice's amounts can't
+    // leave it stale).
     moneyBackReturned: { type: Number, default: 0 },
     moneyBacks: { type: [moneyBackSchema], default: [] },
+    // How much of the ALREADY-PAID money has been handed back (or turned into
+    // store credit / an exchange credit) by a Return or Exchange on this
+    // invoice. A return lowers `total` but must never lower `paid` — `paid` is
+    // the real cash the till took in and the balance engine reads it for legacy
+    // single-tender sales, while the refund leaves the till separately via
+    // Return.cashRefund. Without this counter, `paid − total` looks like an
+    // overpayment the shop still owes, so the invoice would offer a second,
+    // unowed "Money Back" payout for every return ever processed.
+    returnCredit: { type: Number, default: 0 },
     soldBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     // The employee who actually rang this sale up, typed at the counter — often
     // different from `soldBy` (the login account), since several employees

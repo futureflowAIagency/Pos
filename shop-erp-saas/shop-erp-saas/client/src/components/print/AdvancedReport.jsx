@@ -2,6 +2,12 @@ import { taka, fmtDate } from '../../utils/format.js';
 
 const BALANCE_LABELS = { cash: 'Cash', bank: 'Bank', bkash: 'bKash', nagad: 'Nagad', rocket: 'Rocket', card: 'Card' };
 
+// The server sends null (not 0) for every cost-derived figure when the login
+// lacks the "View Buy Price" permission — a per-product profit or stock value
+// would otherwise hand back the exact purchase price. Show a dash so it reads
+// as "hidden", never as a real ৳0.
+const cost = (v) => (v == null ? '—' : taka(v));
+
 // Comprehensive, date-ranged business report (req 8): sales/purchase/profit/
 // expense totals, per-method balances, customer + supplier due, product-wise
 // sales/profit, and a stock summary. Printed via the browser (Print → Save as
@@ -79,7 +85,7 @@ export default function AdvancedReport({ data, business }) {
                 <td className="py-1">{p._id}</td>
                 <td className="text-right py-1">{p.qty}</td>
                 <td className="text-right py-1">{taka(p.revenue)}</td>
-                <td className="text-right py-1">{taka(p.profit)}</td>
+                <td className="text-right py-1">{cost(p.profit)}</td>
               </tr>
             ))}
           </tbody>
@@ -89,7 +95,9 @@ export default function AdvancedReport({ data, business }) {
                 <td className="py-1">Total</td>
                 <td className="text-right py-1">{productWise.reduce((a, p) => a + p.qty, 0)}</td>
                 <td className="text-right py-1">{taka(productWise.reduce((a, p) => a + p.revenue, 0))}</td>
-                <td className="text-right py-1">{taka(productWise.reduce((a, p) => a + p.profit, 0))}</td>
+                <td className="text-right py-1">
+                  {cost(productWise.some((p) => p.profit == null) ? null : productWise.reduce((a, p) => a + p.profit, 0))}
+                </td>
               </tr>
             </tfoot>
           )}
@@ -101,7 +109,7 @@ export default function AdvancedReport({ data, business }) {
           <tbody>
             <Row l="Total Products" r={stock.totalProducts} />
             <Row l="Total Stock Qty" r={stock.totalQty} />
-            <Row l="Total Stock Value (at cost)" r={taka(stock.totalValue)} />
+            <Row l="Total Stock Value (at cost)" r={cost(stock.totalValue)} />
             <Row l="Low Stock Items" r={stock.lowStockCount} />
           </tbody>
         </table>
@@ -120,7 +128,7 @@ export default function AdvancedReport({ data, business }) {
                 <td className="py-1">{it.name}</td>
                 <td className="py-1">{it.category}</td>
                 <td className="text-right py-1">{it.stock}</td>
-                <td className="text-right py-1">{taka(it.stockValue)}</td>
+                <td className="text-right py-1">{cost(it.stockValue)}</td>
               </tr>
             ))}
           </tbody>

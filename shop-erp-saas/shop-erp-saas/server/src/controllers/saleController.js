@@ -281,8 +281,14 @@ export const updateSale = asyncHandler(async (req, res) => {
   if (paid != null) sale.paid = Math.max(0, Number(paid) || 0);
   if (customerName != null && String(customerName).trim()) sale.customerName = String(customerName).trim();
 
-  // recompute totals from the (unchanged) line items
-  const itemProfit = sale.items.reduce((s, i) => s + ((i.sellingPrice - i.purchasePrice) * i.qty), 0);
+  // Recompute totals from the (unchanged) line items. Quantities are counted
+  // NET OF RETURNS — a returned unit is no longer sold, so its margin must not
+  // come back just because the invoice was edited afterwards. (`subTotal` was
+  // already lowered by the return itself, so only profit needed this.)
+  const itemProfit = sale.items.reduce(
+    (s, i) => s + ((i.sellingPrice - i.purchasePrice) * Math.max(0, i.qty - (i.returnedQty || 0))),
+    0
+  );
   sale.total = Math.max(0, sale.subTotal - sale.discount);
   sale.due = Math.max(0, sale.total - sale.paid);
   sale.profit = itemProfit - sale.discount;
@@ -347,8 +353,18 @@ export const collectSaleDue = asyncHandler(async (req, res) => {
 });
 
 // Money the customer handed over above the bill and hasn't had back yet.
+// `returnCredit` is subtracted because a return/exchange lowers `total` while
+// `paid` deliberately stays put (it's the real cash the till took, and the
+// refund leaves the till on its own via Return.cashRefund) — without it, every
+// return on a paid invoice would look like an overpayment still owed and offer
+// a second, unowed payout.
 export const moneyBackOf = (sale) =>
-  Math.max(0, Math.round(((sale.paid || 0) - (sale.total || 0) - (sale.moneyBackReturned || 0)) * 100) / 100);
+  Math.max(
+    0,
+    Math.round(
+      ((sale.paid || 0) - (sale.total || 0) - (sale.moneyBackReturned || 0) - (sale.returnCredit || 0)) * 100
+    ) / 100
+  );
 
 // @route POST /api/sales/:id/money-back  — hand back an overpayment.
 // body: { amount, method, note }

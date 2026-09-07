@@ -15,6 +15,7 @@ import { decryptSecret } from '../utils/secretCrypto.js';
 import { generateText, hasCentralAI } from '../services/aiService.js';
 import { computeBalances } from '../services/balanceService.js';
 import { recogniseEmiProfit, findPlansInRange } from '../services/emiService.js';
+import { canViewBuyPrice, hideBuyPrice } from '../utils/buyPrice.js';
 
 // Resolve a { from, to } window from a named period or an explicit custom range.
 // period: daily | weekly | monthly | half_yearly | yearly | custom
@@ -130,7 +131,11 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
   const monthRevenue = salesAgg[0]?.revenue || 0;
   const monthProfit = salesAgg[0]?.profit || 0;
   const monthExpense = expenseAgg[0]?.total || 0;
-  const lowStock = products.filter((p) => p.stock <= p.lowStockAlert);
+  // The low-stock widget ships whole Product documents to the browser, so it
+  // carried purchasePrice straight past the 'view-buy-price' gate — redact it
+  // here the same way getProducts does.
+  const lowStockRaw = products.filter((p) => p.stock <= p.lowStockAlert);
+  const lowStock = canViewBuyPrice(req) ? lowStockRaw : lowStockRaw.map((p) => hideBuyPrice(p.toObject()));
 
   const periodRevenue = periodSalesAgg[0]?.revenue || 0;
   const periodProfit = periodSalesAgg[0]?.profit || 0;
