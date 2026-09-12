@@ -61,7 +61,7 @@ function validateSupplierRow(row) {
   if (!row.name?.trim()) return { ok: false, message: 'Name is required' };
   return { ok: true, data: { name: row.name.trim(), phone: row.phone?.trim() || '', address: row.address?.trim() || '', note: row.note?.trim() || '' } };
 }
-function validateProductRow(row) {
+function validateProductRow(row, defaultLowStock = 1) {
   if (!row.name?.trim()) return { ok: false, message: 'Name is required' };
   const purchasePrice = num(row.purchasePrice, NaN);
   const sellingPrice = num(row.sellingPrice, NaN);
@@ -73,7 +73,9 @@ function validateProductRow(row) {
       name: row.name.trim(), barcode: row.barcode?.trim() || '', sku: row.sku?.trim() || '',
       category: row.category?.trim() || 'General', unit: row.unit?.trim() || 'pcs',
       purchasePrice, sellingPrice, discountPercent: Math.min(100, Math.max(0, num(row.discountPercent, 0))),
-      stock: num(row.stock, 0), lowStockAlert: num(row.lowStockAlert, 5),
+      // Row left it blank → the shop's own configured threshold, never a
+      // hardcoded number (this used to hardcode 5 regardless of Settings).
+      stock: num(row.stock, 0), lowStockAlert: num(row.lowStockAlert, defaultLowStock),
       trackSerial: toBool(row.trackSerial), brand: row.brand?.trim() || '', color: row.color?.trim() || '', storage: row.storage?.trim() || '',
       returnable: row.returnable === undefined || row.returnable === '' ? true : toBool(row.returnable),
     },
@@ -110,7 +112,11 @@ async function runValidation(entity, csvText, req) {
   let results;
   if (entity === 'customers') results = rawRows.map(validateCustomerRow);
   else if (entity === 'suppliers') results = rawRows.map(validateSupplierRow);
-  else if (entity === 'products') results = rawRows.map(validateProductRow);
+  else if (entity === 'products') {
+    const business = await Business.findById(req.businessId).select('settings.lowStockThreshold');
+    const defaultLowStock = Number(business?.settings?.lowStockThreshold ?? 1) || 1;
+    results = rawRows.map((row) => validateProductRow(row, defaultLowStock));
+  }
   else if (entity === 'expenses') results = rawRows.map(validateExpenseRow);
   else if (entity === 'units') { const seen = new Set(); results = await Promise.all(rawRows.map((r) => validateUnitRow(r, seen, req))); }
   else throw new ApiError(400, `Unknown import entity: ${entity}`);
@@ -327,6 +333,10 @@ export const smartImportCommit = asyncHandler(async (req, res) => {
   // so imported phone stock shows the same "Manage IMEIs" controls everywhere.
   const business = await Business.findById(req.businessId);
   const defaultTrackSerial = business?.type === 'mobile';
+  // Same rule as everywhere else this session: a new product's Low Stock
+  // Alert defaults to the shop's own configured threshold, never a bare
+  // hardcoded number.
+  const defaultLowStock = Number(business?.settings?.lowStockThreshold ?? 1) || 1;
 
   const rows = valid.filter((_, i) => !skipRows.has(i));
 
@@ -365,6 +375,7 @@ export const smartImportCommit = asyncHandler(async (req, res) => {
       warrantyBrandMonths: data.warrantyBrandMonths, warrantyShopMonths: data.warrantyShopMonths,
       supplier: supplierByName.get(data.supplierName.trim().toLowerCase()) || null,
       trackSerial: data.imeis.length > 0 || defaultTrackSerial,
+      lowStockAlert: defaultLowStock,
     });
   }
   if (newDocs.size) {

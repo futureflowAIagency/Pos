@@ -22,6 +22,36 @@ export default function Settings() {
   const { theme, toggleTheme } = useTheme();
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
+  const confirmDialog = useConfirm();
+  const [applyingLowStock, setApplyingLowStock] = useState(false);
+
+  // Retroactively applies the current Low Stock Threshold to every EXISTING
+  // product (not just the default for brand-new ones) — products added
+  // before this setting was configured (or before this feature existed at
+  // all, e.g. via an older Smart Import) keep whatever number they were
+  // originally created with, which can silently disagree with what's shown
+  // here. This is a deliberate, owner-triggered bulk change, not something
+  // that runs automatically on every save.
+  const applyLowStockToAll = async () => {
+    const ok = await confirmDialog({
+      title: 'Apply to all products?',
+      message: `This sets Low Stock Alert to ${form.settings.lowStockThreshold} on every product in your shop (all branches), replacing whatever value each product currently has. This cannot be undone automatically.`,
+      confirmText: 'Apply to all products',
+    });
+    if (!ok) return;
+    setApplyingLowStock(true);
+    try {
+      // Save first — the endpoint reads the threshold that's already stored on
+      // the business, so an edited-but-unsaved number in this form must land
+      // there first or the applied value would silently differ from what the
+      // confirm dialog just showed.
+      await api.put('/business', { ...form, settings: { ...form.settings, lowStockThreshold: +form.settings.lowStockThreshold, returnWindowDays: +form.settings.returnWindowDays, printWidthMm: +form.settings.printWidthMm } });
+      await refresh();
+      const { data } = await api.patch('/business/apply-low-stock-threshold');
+      toast.success(data.message || `Updated ${data.data.updated} product(s)`);
+    } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
+    setApplyingLowStock(false);
+  };
 
   // ---- Change password (current password + new password) ----
   const [currentPw, setCurrentPw] = useState('');
@@ -179,7 +209,20 @@ export default function Settings() {
       <div className="card p-5 space-y-4">
         <h3 className="font-semibold">Preferences</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div><label className="label">Low Stock Threshold</label><input className="input" type="number" value={form.settings.lowStockThreshold} onChange={(e) => setS('lowStockThreshold', e.target.value)} /></div>
+          <div>
+            <label className="label">Low Stock Threshold</label>
+            <input className="input" type="number" value={form.settings.lowStockThreshold} onChange={(e) => setS('lowStockThreshold', e.target.value)} />
+            <p className="text-xs text-slate-400 mt-1">
+              Sets the default for brand-new products only. Products already in your
+              catalog keep their own Low Stock Alert number — use the button below to
+              apply this value to every existing product too.
+            </p>
+            {['owner', 'superadmin'].includes(user?.role) && (
+              <button type="button" className="btn-ghost text-xs mt-1.5" disabled={applyingLowStock} onClick={applyLowStockToAll}>
+                {applyingLowStock ? 'Applying…' : 'Apply to all existing products'}
+              </button>
+            )}
+          </div>
           <div>
             <label className="label">Return / Exchange Window</label>
             <select className="input" value={form.settings.returnWindowDays} onChange={(e) => setS('returnWindowDays', e.target.value)}>

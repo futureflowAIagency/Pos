@@ -1041,10 +1041,58 @@ not started, see the note at the end of this entry.
   follow-up) rather than folding it into this round — not yet raised with the client as a
   separate conversation, flagged here so the next session picks it up deliberately rather than
   guessing at scope.
-- **Same standing testing setup as Phase 33, still not committed**: local replica-set DB +
-  server (`:5000`) + client (`:5173`) left running on localhost for the client's own review;
-  nothing pushed. This phase's changes sit on top of Phase 33's already-uncommitted changes —
-  both rounds are awaiting the same "I'll test and approve, then deploy" checkpoint.
+- **2026-09-12 — client tested locally, approved, and this + Phase 33 were committed
+  (`970a567`) and deployed to production** (pos-saas.futureflowaiagency.com). Local test
+  processes stopped and `server/_test-mongo.mjs` removed as part of that commit.
+
+- **2026-09-12 — same-day post-deploy fix: Low Stock Alert bug wasn't actually fixed for
+  existing products.** Client reported (with screenshots from the live production shop,
+  "Alif Mobile House") that products already sitting at 2 pcs were still shown red/low-stock
+  even after setting Settings → Low Stock Threshold to 1. Root cause: Phase 34's fix only
+  changed the *schema default* (5→1) and the *client-side default for new items* — it never
+  touched two server code paths that **explicitly hardcoded a literal `5`**, bypassing the
+  schema default entirely:
+  - `productController.js`'s `createProductsWithSupplier` (Add-Product-with-Supplier's
+    brand-new-product branch): `lowStockAlert: Number(raw.lowStockAlert) || 5`.
+  - `importController.js`'s `validateProductRow` (the strict per-entity CSV product
+    importer): `lowStockAlert: num(row.lowStockAlert, 5)`.
+  Neither bug was hit by the client-side flows verified during Phase 34's own testing (the
+  client always sends its own already-correct default), which is why they weren't caught
+  then — but any pre-existing product created through either path **before** this session
+  (almost certainly including the client's own Smart-Imported "Zobayer Smart Zone" phone
+  batch, which explains the exact products in their screenshot) is permanently stuck with
+  `lowStockAlert: 5` in the database, and no code change can retroactively fix a value
+  already written to existing documents.
+  - **Fixed going forward**: both hardcoded `5`s now fall back to the business's own
+    `settings.lowStockThreshold` (fetched once per request) instead of a literal number.
+    `importController.js`'s Smart Stock Import product-creation path (`smartImportCommit`,
+    a separate function from the CSV importer above) didn't set `lowStockAlert` on new
+    products at all before this fix — relied on the Mongoose schema default (already 1) —
+    now sets it explicitly from the business threshold too, for consistency and so a shop
+    with a non-default threshold gets it right on the very next import.
+  - **Fixed retroactively (the client's actual, immediate problem)**: new
+    `PATCH /api/business/apply-low-stock-threshold` (owner/superadmin only,
+    `businessController.js`) bulk-sets **every existing product's** `lowStockAlert` to the
+    business's current threshold, business-wide across all branches (this setting isn't
+    branch-scoped) — an explicit, owner-triggered action, never automatic on a plain
+    Settings save (a silent bulk overwrite of live inventory data felt wrong without the
+    owner choosing the moment). New "Apply to all existing products" button directly under
+    the Low Stock Threshold field in `Settings.jsx`, gated behind the existing `useConfirm()`
+    dialog (states in plain language that this replaces every product's current number and
+    cannot be auto-undone) — the handler saves the form's current threshold first, then
+    calls the new endpoint, so what the confirm dialog just said and what actually gets
+    applied can never silently disagree.
+  - Verified live end-to-end on the same disposable local MongoDB replica set: manually
+    forced two seeded products to `lowStockAlert: 5` to reproduce the exact bug (confirmed
+    via computed-style inspection — the "3 pcs" row rendered `text-red-500` despite a
+    threshold of 1), clicked the new Settings button, confirmed the dialog, and re-checked
+    both the UI (row no longer red) and the raw database (both products now `lowStockAlert:
+    1`) — and confirmed the OTHER seeded business's products were correctly left untouched
+    (the endpoint is business-scoped). `node --check` + full `app.js` import-chain + client
+    `vite build` all clean.
+  - **Not yet deployed** — this fix needs its own commit/push + VPS redeploy cycle, same
+    process as Phase 33/34. The client should click "Apply to all existing products" once in
+    Settings after this deploy to clean up their live catalog's existing stale values.
 
 ---
 

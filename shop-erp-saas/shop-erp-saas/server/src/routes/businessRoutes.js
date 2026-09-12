@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getMyBusiness, updateBusiness } from '../controllers/businessController.js';
+import { getMyBusiness, updateBusiness, applyLowStockThresholdToAllProducts } from '../controllers/businessController.js';
 import { protect } from '../middleware/auth.js';
 import { requireBusiness } from '../middleware/tenant.js';
 import { authorize } from '../middleware/role.js';
@@ -13,4 +13,5 @@ router.use(protect, requireBusiness);
 // nav link is shown to a staff member on the frontend, since they could never save here anyway.
 router.get('/', getMyBusiness);
 router.put('/', authorize('owner', 'superadmin'), updateBusiness);
+router.patch('/apply-low-stock-threshold', authorize('owner', 'superadmin'), applyLowStockThresholdToAllProducts);
 export default router;

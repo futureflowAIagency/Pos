@@ -13,6 +13,7 @@ import Purchase from '../models/Purchase.js';
 import PurchaseBatch from '../models/PurchaseBatch.js';
 import Sale from '../models/Sale.js';
 import StockSnapshot from '../models/StockSnapshot.js';
+import Business from '../models/Business.js';
 
 const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -130,6 +131,12 @@ export const createProductsWithSupplier = asyncHandler(async (req, res) => {
   if (!trimmedSupplierName && !items.every((it) => it.existingProductId)) {
     throw new ApiError(400, 'Supplier / dealer name is required');
   }
+  // Fallback default for a brand-new item that didn't send its own Low Stock
+  // Alert — the shop's own configured threshold, never a hardcoded number
+  // (that was a real bug: this used to hardcode 5 regardless of what the
+  // owner had set in Settings).
+  const businessForDefaults = await Business.findById(req.businessId).select('settings.lowStockThreshold');
+  const defaultLowStockAlert = Number(businessForDefaults?.settings?.lowStockThreshold ?? 1) || 1;
 
   let supplier;
   if (trimmedSupplierName) {
@@ -267,7 +274,7 @@ export const createProductsWithSupplier = asyncHandler(async (req, res) => {
         purchasePrice: purchasePriceNow,
         sellingPrice: sellingPriceNow,
         discountPercent: Number(raw.discountPercent) || 0,
-        lowStockAlert: Number(raw.lowStockAlert) || 5,
+        lowStockAlert: Number(raw.lowStockAlert) || defaultLowStockAlert,
       });
       createdProducts.push(product);
 
