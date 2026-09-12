@@ -5,7 +5,34 @@
 > done, what remains, decisions made, and where each feature lives in the code.
 > **Update this file after every completed phase / meaningful change.**
 
-Last updated: **2026-09-06** — Phase 28 (session-3 fixes) complete; **Phase 29 (Admin Panel data visibility: per-shop branch/data-usage view + a full data browser)**, **Phase 30 ("Scan with Phone" — remote camera barcode scanning, no app install)**, **Phase 31 (thermal receipt right-edge clipping — real root cause, in 3 rounds)**, and **Phase 32 (Stock Transfer between branches)** all complete; plus a same-day hotfix (Pay Salary threw a validation error because Phase 25's now-required `Expense.branch` was never added to the salary-payment code) that also added split-tender + advance-vs-salary payment types. See §3 for each and §5 for the full narrative. Previously: all 10 original phases complete; Phase 11–14 complete; Phase 15 (Scan IMEI with AI) was built then fully removed at client request; a real Products-search bug fix landed; Low Stock Alert pagination fix complete; Phase 16 (Migration Excel template + existing-vs-new IMEI logic + accept/decline review) complete; Phase 17 (keyboard-only POS for Pharmacy — name-search suggestions + Enter chain) complete; Phase 18 (POS quantity step + Shift+Enter to customer + optional customer name/phone) complete; Phase 19 (expired stock warned + blocked from sale) complete; Phase 20 (Smart Stock Import: name-only files now import; template columns no longer silently dropped) complete; Phase 21 (Smart Import bulk-DB rewrite — 550-row uploads no longer time out) complete; Phase 22 (supplier due directly editable) complete; Phase 23 (business type renamed + admin-panel user deletion) complete; Phase 24 (Products search price panel) complete; Phase 25 (Multi-Branch Support) complete; Phase 26 (customer due-date reminders + a real notification system) complete — shipped with a hotfix (dead `useRef` reference crashed every logged-in page, caught via the client's browser console and fixed same-day); Phase 27 (Sidebar app-version indicator + "Relaunch to update" prompt) complete.
+Last updated: **2026-09-12** — **Phase 33** (purchase-batch price history + 7 more POS
+updates) and **Phase 34** (Update Price button, blank category default, live IMEI count, POS
+payment default, Low Stock sync fix — items 1-5 of a follow-up 8-item request; items 6-8,
+performance + offline mode, not yet started/scoped) both built and verified against a
+disposable local MongoDB replica set, but **NOT YET COMMITTED OR DEPLOYED** — awaiting the
+client's own localhost testing and approval per their explicit instruction. See §3 Phase 33
+and Phase 34 for full detail. Before that: Phase 28 (session-3 fixes) complete; **Phase 29
+(Admin Panel data visibility: per-shop branch/data-usage view + a full data browser)**,
+**Phase 30 ("Scan with Phone" — remote camera barcode scanning, no app install)**, **Phase 31
+(thermal receipt right-edge clipping — real root cause, in 3 rounds)**, and **Phase 32 (Stock
+Transfer between branches)** all complete; plus a same-day hotfix (Pay Salary threw a
+validation error because Phase 25's now-required `Expense.branch` was never added to the
+salary-payment code) that also added split-tender + advance-vs-salary payment types. See §3
+for each and §5 for the full narrative. Previously: all 10 original phases complete; Phase
+11–14 complete; Phase 15 (Scan IMEI with AI) was built then fully removed at client request; a
+real Products-search bug fix landed; Low Stock Alert pagination fix complete; Phase 16
+(Migration Excel template + existing-vs-new IMEI logic + accept/decline review) complete;
+Phase 17 (keyboard-only POS for Pharmacy — name-search suggestions + Enter chain) complete;
+Phase 18 (POS quantity step + Shift+Enter to customer + optional customer name/phone)
+complete; Phase 19 (expired stock warned + blocked from sale) complete; Phase 20 (Smart Stock
+Import: name-only files now import; template columns no longer silently dropped) complete;
+Phase 21 (Smart Import bulk-DB rewrite — 550-row uploads no longer time out) complete; Phase
+22 (supplier due directly editable) complete; Phase 23 (business type renamed + admin-panel
+user deletion) complete; Phase 24 (Products search price panel) complete; Phase 25
+(Multi-Branch Support) complete; Phase 26 (customer due-date reminders + a real notification
+system) complete — shipped with a hotfix (dead `useRef` reference crashed every logged-in
+page, caught via the client's browser console and fixed same-day); Phase 27 (Sidebar
+app-version indicator + "Relaunch to update" prompt) complete.
 
 > **Note on continuity (2026-09-06):** Phases 29–32 below and their §5 entries were written up retroactively while fixing the Pay Salary bug — a prior session did the actual work (visible in `git log`) but never updated this file, so the phase numbers/dates here are reconstructed from commit messages, not live at the time. Also: this file's own §0 "Working dir" path (`...Desktop\Important Files\shop-erp-saas-updated`) is stale — the real working directory for the last several sessions has been `C:\Users\MIHI\Desktop\shop-erp-saas-updated` (no "Important Files"); left uncorrected since it's a pre-existing note, not something this update was asked to fix.
 
@@ -806,6 +833,218 @@ page) and **Stock Transfer** (new).
   - **Two observations reported but deliberately not changed** (not bugs, but the client should know): (a) `ServiceJob.partsCost`/`technicianCost` reduce reported profit but are not an outflow anywhere in the balance engine, so buying ৳2,000 of parts in cash leaves the Cash balance ৳2,000 high unless a separate Expense is also recorded; (b) Dashboard's "Total Profit" folds in EMI profit but not service profit, and "Total Income" excludes service revenue — service shows in its own row instead. Both are pre-existing scope decisions from Phases 5/28, not regressions.
   - Verified: `node --check` across the whole server tree + full `app.js` import-chain boot + client `vite build` + a 50-case logic fixture over the three fixes (including the old behaviour asserted as a contrast, partial payment, a return smaller than the outstanding due, two sequential returns, an over-return still refused, an exchange, a fully-returned invoice, and the genuine-overpayment case) — 50/50. Not exercised against a live database (standing limitation); asked the client to process one small real return on a paid invoice and confirm no "Money Back" amount appears afterwards.
 - **2026-09-06** — **"Sell by" on the invoice + customer address at POS + Customers list shows NID/Address.** `Sale.soldBy` had been stored on every sale for a long time, but nothing ever populated it before returning a sale to the client, so the printed receipt had no name to show — added `.populate('soldBy','name')` everywhere a Sale reaches a print component (`createSale`'s own response, `getSale`, `customerHistory`'s sales list); `ThermalReceipt.jsx` prints the client's exact requested wording, `Sell by "name"`. POS gained a Customer Address field (right after Customer Name, in the keyboard Enter-chain, threaded through Hold/Resume) that backfills onto a new-or-existing customer the same way NID capture already does. Customers list now shows NID and Address columns — `GET /customers` already returned full documents, they just weren't rendered.
+
+### ✅ Phase 33 — 8-item POS update: purchase-batch price history, category combobox, smart search, split purchase payments, storage/color in reports, Stock Print + Finance dropdowns (2026-09-12)
+
+A fresh, detailed 8-item Bangla requirements doc, centered on one real gap: buying the same
+product again at a different price had no history at all, and the "Add Product with
+Supplier" flow always created a **duplicate** `Product` document rather than adding stock to
+the existing one. The client explicitly asked for genuine localhost testing before any
+deployment — the first time this project has had a local database at all (approved: a
+disposable `mongodb-memory-server` instance, seeded via the existing `npm run seed`, never
+touching the production Atlas cluster). Went through `/plan` first given the size (an Explore
+pass + a dedicated Plan-agent design review of the batch-pricing architecture before writing
+any code).
+
+1. **Purchase-batch price history (the core feature)** — new `PurchaseBatch` model (one row
+   per purchase event: product/supplier/purchasePrice/sellingPrice/qty/qtyRemaining/
+   purchaseDate), and `PhoneUnit` gained its own optional `purchasePrice`/`sellingPrice`/
+   `batch` (nullable, `!= null` checked everywhere, never `||` — a legitimate ৳0 cost must not
+   be read as "unset"). New `server/src/utils/purchaseBatch.js`: `consumeBatchesFifo` (oldest-
+   batch-first cost/price resolution for plain-qty lines, degrading to the flat product price
+   when a product has zero batches — true for every product that predates this feature) and
+   `resolveLineCost` (unit's own price → FIFO batch → flat product price), used identically by
+   **both** `saleController.createSale` and `returnController.createExchange` — fixing only one
+   would have left Exchange silently on old flat pricing, a real inconsistency the design pass
+   caught before it shipped. `productController.createProductsWithSupplier` rewritten: an item
+   with an explicit `existingProductId` (client picks it via a new restock-search box, no
+   auto-detection by name/barcode — too easy to silently merge two different phones sharing a
+   display name) **restocks** — updates the product's current/reference price + supplier,
+   **additively** grows stock (a full re-count of in-stock units for serial-tracked products,
+   not `imeis.length`, which would have silently wiped existing stock down to just the new
+   batch — this was the single most dangerous line in the whole feature and got its own
+   dedicated test), and creates a new `PurchaseBatch` — existing `PhoneUnit`/other product
+   fields are never touched. No id → unchanged "always new product" behavior. New
+   `GET /products/:id/purchase-batches` (**"Item Purchase Rate Information"**, in the new Stock
+   Print dropdown) lists the history with a `lastPurchaseRate`, gated by the same
+   `canViewBuyPrice` convention as every other cost-revealing route.
+   - **Real bug found only by live-DB click-through** (fixture tests couldn't have caught it):
+     POS's "Matching units" preview and the cart line it built both read `unit.product.
+     sellingPrice` (the flat CURRENT price) instead of the specific scanned unit's own
+     preserved price — so after a later restock at a new price, an older unit's cart total
+     (and what the cashier would collect) disagreed with what the server actually charged/
+     recorded, leaving a phantom overpayment. Fixed via a shared `unitDisplayPrice()` helper in
+     `POS.jsx` mirroring the server's `resolveLineCost` preference order; re-verified live
+     (restock at 150k → 160k → 170k, sell the 150k-priced unit, invoice correctly shows
+     150k/175k not the current 170k/195k) — confirmed against a real replica-set test DB, not
+     just a fixture.
+   - **Scope boundary, confirmed sound live**: returns never restore `PurchaseBatch.
+     qtyRemaining` — `returnController.processReturnItems` already reverses profit from the
+     line's own resolved `purchasePrice`, so it needs zero changes and stays correct regardless
+     (verified live: returning a batch-priced 160k/185k unit correctly zeroed that line's
+     profit and banked the refund via `returnCredit`, in step with the audit-fix from the
+     session before this one). The one honest residual limitation: if a batch sells out and a
+     unit from it is later returned, the *next* sale's FIFO pick can't tell it apart from newer
+     stock — `Product.stock` stays exactly right, only that edge case's cost attribution can
+     drift. Documented, not fixed (would need a `batch` ref stored per sale line to fix
+     properly — flagged as a possible follow-up).
+2. **Category — a real dropdown, not a native datalist**: new `client/src/components/ui/
+   ComboBox.jsx` (an app-rendered `absolute` panel, same idiom as POS's own product-search
+   dropdown — shows every option on focus, filters as you type, still a free-text input
+   underneath) replaces `<input list="category-options">` in both the Edit-Product form and
+   the create-mode `ItemBlock`, since a native datalist doesn't reliably show "all options" on
+   a bare click and can't be styled.
+2b. **Smart product search**: `getProducts`'s `$or` now also matches `category`/`brand`/
+   `storage`/`color` (previously name/sku/barcode/IMEI only), with the search term properly
+   `escapeRegex`'d (a pre-existing minor gap closed in passing). The main Products search box
+   gained a lightweight suggestion dropdown (purely additive — the existing "price panel"
+   cards are untouched).
+3. **"Paid Now" auto-sum**: `Products.jsx`'s Add-Product-with-Supplier form was missing the
+   running-total display `Suppliers.jsx`'s own purchase modal already had — added the same
+   `Σ purchasePrice × qty` total, and "Paid Now" now auto-fills to match it until the owner
+   actually types into a payment row themselves (a `paidTouched` flag, so a manual edit is
+   never silently clobbered by a later recalculation).
+4. **Split-tender purchase payments**: `Purchase` gained an optional `payments[]` (mirroring
+   `Sale.payments[]`'s dual-path pattern — legacy `paid`+`source` still works for every existing
+   record). `balanceService`'s Purchase-outflow aggregate unwinds `payments[]` when present,
+   same technique already proven for Sale/ServiceJob this session; `computeAccountBalances`
+   also gained purchase-payment-account coverage. New `client/src/components/ui/
+   PaymentRows.jsx` (method+amount+account rows, add/remove, fill-remaining) — a fresh small
+   component, **not** a refactor of POS.jsx's own payment-row code, so the most heavily-used
+   page's checkout stayed completely untouched. Wired into `Products.jsx`'s purchase section
+   and both of `Suppliers.jsx`'s `PurchaseModal`/`PayModal`.
+5. **Storage & Color were missing from print reports**: `StockReport.jsx` (by-supplier) and
+   `StockReportByBrand.jsx` now print a `[brand, storage, color]` subtext line per product,
+   reusing `ProductStockReport.jsx`'s existing join pattern — presentation-only.
+6/7. **Stock Print consolidated into one dropdown, with a supplier scope**: new
+   `client/src/components/ui/DropdownMenu.jsx` (same floating-panel idiom as
+   `NotificationBell.jsx`) replaces the 3 separate "Stock Print..." buttons on Products with
+   one "Stock Print ▾" menu (Stock Print by Supplier / by Brands / by Model / **Item Purchase
+   Rate Information**). "Stock Print (by Supplier)" gained an All-Suppliers-vs-one-supplier
+   picker (client-side filter, `getProducts` already returns populated `supplier`).
+8. **Finance page reorganized into dropdowns**: the same `DropdownMenu.jsx` groups the 6
+   toolbar buttons into **Fund & Transfer ▾** (Add/Withdraw Fund, Transfer Balance) and
+   **Reports ▾** (Print Report, Advanced Report), with Add Expense left standalone as the
+   single most common action. Presentation-only — every modal/handler is untouched.
+- **Also fixed in passing**: `server/src/seed/seed.js` predates Phase 25 (Multi-Branch) and
+  never created a `Branch` or stamped `branch` on its Products/PhoneUnits — `npm run seed` has
+  been silently broken (a `ValidationError: branch is required` crash) since that phase shipped,
+  just never noticed because this project never had a local DB to run it against until now.
+  Fixed by creating a Main Branch per seeded business, matching what `ensureMainBranches()`
+  already does for real production data.
+- **New shared components**: `ComboBox.jsx`, `DropdownMenu.jsx`, `PaymentRows.jsx` (all
+  additive; nothing existing was refactored onto them beyond the specific fields/buttons named
+  above).
+- Verified: `node --check` across the whole server tree + full `app.js` import-chain boot +
+  client `vite build`; a 33-case standalone logic fixture (FIFO consumption incl. multi-batch
+  weighted-average cost and oldest-first ordering, unit price fallback incl. the `!= null` vs
+  `||` zero-cost trap, restock-vs-new-product detection incl. the serial-restock stock-count
+  trap, a return's profit-reversal needing zero code changes, Paid-Now auto-sum, split-payment
+  arithmetic) — 33/33. **New this round**: real end-to-end testing against a disposable local
+  MongoDB replica set (`mongodb-memory-server` — a plain standalone instance was tried first
+  and correctly rejected `createSale`'s Mongo transactions with "Transaction numbers are only
+  allowed on a replica set member or mongos", exactly like a real non-replica-set Mongo would;
+  switched to a single-node `MongoMemoryReplSet` to match production Atlas's own replica-set
+  shape) — logged in as the seeded mobile shop, restocked the same iPhone three times at three
+  different prices, confirmed stock summed additively each time (not overwritten), sold and
+  returned units from different batches and read the raw invoice/return JSON to confirm the
+  exact historical price was charged and reversed each time, caught and fixed the POS
+  price-display bug this way, and clicked through the Category combobox, Stock Print dropdown
+  (all 4 items, incl. storage/color in the printed report), and the Finance dropdown. This is
+  the second phase (after Phase 30's phone-scanner testing) verified against something more
+  than logic fixtures alone.
+- **Left running for the client's own review, exactly as asked**: the disposable test DB +
+  server (`:5000`) + client (`:5173`) are left up on localhost — nothing has been committed or
+  pushed. `server/_test-mongo.mjs` (untracked, gitignored-equivalent scratch file) and the
+  `mongodb-memory-server` package (installed with `--no-save`, so `package.json` is untouched)
+  are the only testing artifacts and will be removed once the client confirms and this is ready
+  to commit.
+
+### 🟡 Phase 34 — 2nd POS update round: Update Price button, blank category default, live IMEI count, POS payment default, Low Stock sync fix (2026-09-12, items 1-5 of 8 done; 6-8 pending)
+
+A follow-up 8-item Bangla request arrived while Phase 33 was still awaiting the client's
+localhost approval, refining/extending it. Items 1-5 (bounded, directly implementable) are
+done and verified on the same disposable local replica-set DB Phase 33 used; items 6-8
+(performance + a full offline-first caching/sync architecture) are large enough in scope and
+risk for a live financial/inventory system that they need their own dedicated scoping pass —
+not started, see the note at the end of this entry.
+
+1. **Per-product "Update Price" button (no supplier re-entry)** — new per-row action
+   (`Products.jsx`, green ↗ icon) opens `UpdatePriceModal`: Updated Purchase Price, Updated
+   Selling Price, then IMEI-scan (live "N scanned" counter, also accepts the connected phone
+   scanner) or a plain quantity for non-serial items, then Paid Now (`PaymentRows`,
+   auto-sums to the batch total until manually edited — the same `paidTouched` pattern used
+   everywhere else this session). Submits to the **same** `POST /products/batch-with-supplier`
+   restock path Phase 33 built (`existingProductId` set, one item) — this is deliberately not
+   a new code path, just a new, faster entry point into the existing, already-tested batch
+   logic (price history, additive stock, the serial-restock full-recount safeguard all apply
+   unchanged).
+   - **Real gap this surfaced and fixed**: `createProductsWithSupplier` unconditionally
+     required a `supplierName`, which is fine for the multi-item "Add Product" form (a brand
+     new product needs a supplier assigned) but wrong for Update Price, whose whole point is
+     "don't ask again." `productController.js` now only requires `supplierName` when at least
+     one submitted item is NOT a restock; a blank name on an all-restock submission reuses
+     that product's own existing `Product.supplier` unchanged, falling back to a find-or-create
+     "Unknown Supplier" only for the rare case where the product genuinely has none yet (older
+     data, or a product added before suppliers existed on this catalog) — verified live: a
+     seeded product with no supplier restocked cleanly and picked up "Unknown Supplier"
+     automatically, with the price/stock/history all landing exactly as they do for the
+     existing multi-item restock flow.
+2. **Category defaults to blank, not "Mobile"/"General"/"Medicine"** — the `empty`/`emptyItem`
+   objects and all four hardcoded call sites in `Products.jsx` (`onScan`'s 404 branch,
+   `openNew`, `pickRestock`'s "switch to new" branch, `addItemBlock`) now start
+   `category: ''`. The `ComboBox` from Phase 33 already shows every previously-used category
+   as a suggestion on focus/click and still accepts free-typing — verified live (empty field
+   on open, "Accessory"/"Mobile" suggested on click).
+3. **Live IMEI-scanned count** — new `imeiCount(text)` helper; every IMEI/serial/unit-code
+   textarea (`ItemBlock`'s new-item and restock branches, `UnitsModal`'s bulk-add box, and the
+   new `UpdatePriceModal`) now shows a live "N scanned" counter next to its label as lines are
+   typed or scanned in. Verified live (counter went 0 → 2 while scanning/typing two IMEIs).
+4. **POS payment defaults to Paid = Total / Due = 0** — previously Paid started blank (Due
+   showing the full total until checkout, where a blank payment was silently treated as "paid
+   in full"). New `paidTouched` flag (mirrors the Paid-Now pattern): a `useEffect` keeps the
+   single payment row's amount equal to the live total until the cashier edits an amount,
+   splits into more than one tender, or resumes a held bill (whose saved amount is preserved
+   as-is, not re-synced to a new total) — `resetSale` clears the flag for the next sale.
+   Verified live: adding an item showed Paid=350/Due=0 immediately; manually editing Paid to
+   100 correctly showed Due=250; adding a second item then grew Total to 700 while Paid stayed
+   at the manually-entered 100 (Due recalculating to 600) — confirming the manual edit is never
+   silently overwritten.
+5. **Low Stock Alert default 5 → 1, and Settings → Products sync fixed** — `Product.
+   lowStockAlert` schema default and `Business.settings.lowStockThreshold` schema default both
+   changed 5 → 1; `Settings.jsx`'s own populate fallback (`?? 5` → `?? 1`) matched. The real
+   sync bug: `Products.jsx` never read the business's actual saved threshold at all — a new
+   `defaultLowStock = business?.settings?.lowStockThreshold ?? 1` is now threaded into every
+   place a fresh item is created (`openNew`, `onScan`'s 404 branch, `pickRestock`'s
+   "new product" branch, `addItemBlock`), replacing the old hardcoded `5`. Verified live
+   end-to-end: a fresh Add-Product showed Low Stock Alert = 1 (the schema default, since
+   Settings hadn't been touched yet), then after changing Settings' Low Stock Threshold to 3
+   and saving, reopening Add Product showed 3 — confirming the two screens now genuinely agree.
+- Verified: `node --check` across the **entire** server tree + full `app.js` import-chain boot
+  + client `vite build` (same pre-existing unrelated `LanguageContext.jsx` warning, nothing
+  new) — all clean. Real click-through testing against the same disposable local MongoDB
+  replica set from Phase 33 (server `:5000` restarted to pick up these changes — caught and
+  fixed a stale-process gap where the first restock attempt failed with "Supplier / dealer
+  name is required" simply because the running server process pre-dated the productController
+  edit, not a real bug in the code) covering all 5 items as described above.
+- **Items 6-8 not started this round** (performance/offline): the client's ask is (6) the app
+  feels slow (10-15s button-click response times) and needs local/cached data for instant UI
+  with background sync; (7) the caching architecture should support a future fully-offline
+  mode; (8) offline changes must survive a PC shutdown/restart via persistent storage, with no
+  data loss, no duplicate sync, no incorrect overwrites, failed-sync retry, and automatic
+  reconnection sync. This is a fundamentally different scale of change from items 1-5 — it
+  touches how every page reads/writes data, and for a live financial/inventory system, a
+  wrong move (e.g. two offline devices both "selling" the last unit of a unique-IMEI phone)
+  risks real double-selling or corrupted balances. Recommend a dedicated scoping/design pass
+  (likely its own `/plan` session, probably split into "diagnose+fix concrete slow endpoints"
+  as a first, lower-risk step, and "true offline mode" as a separate, carefully-designed
+  follow-up) rather than folding it into this round — not yet raised with the client as a
+  separate conversation, flagged here so the next session picks it up deliberately rather than
+  guessing at scope.
+- **Same standing testing setup as Phase 33, still not committed**: local replica-set DB +
+  server (`:5000`) + client (`:5173`) left running on localhost for the client's own review;
+  nothing pushed. This phase's changes sit on top of Phase 33's already-uncommitted changes —
+  both rounds are awaiting the same "I'll test and approve, then deploy" checkpoint.
 
 ---
 

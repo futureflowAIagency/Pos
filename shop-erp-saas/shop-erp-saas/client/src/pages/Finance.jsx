@@ -7,6 +7,7 @@ import DataTable from '../components/ui/DataTable.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import Spinner from '../components/ui/Spinner.jsx';
 import AccountSelect from '../components/ui/AccountSelect.jsx';
+import DropdownMenu from '../components/ui/DropdownMenu.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import AdvancedReport from '../components/print/AdvancedReport.jsx';
 import { taka, fmtDate } from '../utils/format.js';
@@ -118,10 +119,23 @@ export default function Finance() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-2xl font-bold">Finance</h1>
         <div className="flex gap-2 flex-wrap">
-          <button className="btn-ghost" onClick={() => setPrintReport(true)}><Printer size={18} /> Print Report</button>
-          <button className="btn-ghost" onClick={() => openFund('add')}><PiggyBank size={18} /> Add Fund</button>
-          <button className="btn-ghost" onClick={() => openFund('withdraw')}><PiggyBank size={18} /> Withdraw Fund</button>
-          <button className="btn-ghost" onClick={() => setTransferModal(true)}><ArrowLeftRight size={18} /> Transfer Balance</button>
+          <DropdownMenu
+            label="Fund & Transfer"
+            icon={PiggyBank}
+            items={[
+              { label: 'Add Fund', icon: PiggyBank, onClick: () => openFund('add') },
+              { label: 'Withdraw Fund', icon: PiggyBank, onClick: () => openFund('withdraw') },
+              { label: 'Transfer Balance', icon: ArrowLeftRight, onClick: () => setTransferModal(true) },
+            ]}
+          />
+          <DropdownMenu
+            label="Reports"
+            icon={FileBarChart}
+            items={[
+              { label: 'Print Report', icon: Printer, onClick: () => setPrintReport(true) },
+              { label: 'Advanced Report', icon: FileBarChart, onClick: runAdvancedReport, disabled: advLoading },
+            ]}
+          />
           <button className="btn-primary" onClick={() => setModal(true)}><Plus size={18} /> Add Expense</button>
         </div>
       </div>

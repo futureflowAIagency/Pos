@@ -5,6 +5,7 @@ import { ok, created } from '../utils/apiResponse.js';
 import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import { expiredError } from '../utils/expiry.js';
+import { resolveLineCost } from '../utils/purchaseBatch.js';
 import Return from '../models/Return.js';
 import Sale from '../models/Sale.js';
 import Product from '../models/Product.js';
@@ -202,17 +203,27 @@ export const createExchange = asyncHandler(async (req, res) => {
         // an exchange hands out a replacement item — same expiry rule as a sale
         const expired = expiredError(product);
         if (expired) throw new ApiError(400, expired);
-        const pct = Math.min(Math.max(product.discountPercent || 0, 0), 100);
-        const unitPrice = Math.round((product.sellingPrice * (1 - pct / 100)) * 100) / 100;
-        const line = {
-          product: product._id, name: product.name, qty: it.qty || 1,
-          purchasePrice: product.purchasePrice, mrp: product.sellingPrice, discountPercent: pct, sellingPrice: unitPrice,
-        };
+
+        let unit = null;
         if (it.unit) {
-          const unit = await PhoneUnit.findOne(branchFilter(req, { _id: it.unit })).session(session);
+          unit = await PhoneUnit.findOne(branchFilter(req, { _id: it.unit })).session(session);
           if (!unit) throw new ApiError(404, 'Selected device unit not found');
           if (unit.status === 'sold') throw new ApiError(400, `Device ${unit.imei1 || unit.serial} is already sold`);
           if (String(unit.product) !== String(product._id)) throw new ApiError(400, 'Unit does not match product');
+        }
+
+        // Same historical cost/price resolution as a plain sale (unit's own
+        // stored price → FIFO batch → flat product price) — an exchange hands
+        // out a replacement item exactly like a sale does, and must never
+        // silently disagree with POS checkout about what that costs.
+        const { purchasePrice: unitCost, sellingPriceBase } = await resolveLineCost(req, session, product, { unit, qty: it.qty || 1 });
+        const pct = Math.min(Math.max(product.discountPercent || 0, 0), 100);
+        const unitPrice = Math.round((sellingPriceBase * (1 - pct / 100)) * 100) / 100;
+        const line = {
+          product: product._id, name: product.name, qty: it.qty || 1,
+          purchasePrice: unitCost, mrp: sellingPriceBase, discountPercent: pct, sellingPrice: unitPrice,
+        };
+        if (unit) {
           line.qty = 1;
           const MONTH = 30 * 24 * 60 * 60 * 1000;
           const brandMonths = product.warrantyBrandMonths || 0;
@@ -226,7 +237,7 @@ export const createExchange = asyncHandler(async (req, res) => {
           line.warrantyExpiry = wMonths > 0 ? new Date(Date.now() + wMonths * MONTH) : null;
 
           newSubTotal += unitPrice;
-          newProfit += unitPrice - product.purchasePrice;
+          newProfit += unitPrice - unitCost;
 
           unit.status = 'sold'; unit.soldAt = new Date(); unit.soldPrice = unitPrice;
           unit.customer = oldSale.customer; unit.customerName = oldSale.customerName;
@@ -239,7 +250,7 @@ export const createExchange = asyncHandler(async (req, res) => {
         } else {
           if (product.stock < line.qty) throw new ApiError(400, `Insufficient stock for ${product.name}`);
           newSubTotal += unitPrice * line.qty;
-          newProfit += (unitPrice - product.purchasePrice) * line.qty;
+          newProfit += (unitPrice - unitCost) * line.qty;
           product.stock -= line.qty;
         }
         await product.save({ session });

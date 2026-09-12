@@ -12,6 +12,17 @@ const purchaseItemSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// One tender used to pay for a purchase, when the payment was split across
+// more than one method — same shape as Sale's paymentLineSchema.
+const purchasePaymentLineSchema = new mongoose.Schema(
+  {
+    method: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' },
+    amount: { type: Number, default: 0 },
+    account: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentAccount', default: null },
+  },
+  { _id: false }
+);
+
 const purchaseSchema = new mongoose.Schema(
   {
     business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
@@ -24,8 +35,15 @@ const purchaseSchema = new mongoose.Schema(
     total: { type: Number, default: 0 },
     paid: { type: Number, default: 0 },
     due: { type: Number, default: 0 },
-    // which balance the `paid` amount came from — feeds the dashboard balance engine (outflow)
+    // which balance the `paid` amount came from — legacy single-tender field,
+    // kept for back-compat (every purchase before this feature has no
+    // `payments[]`, and still reads correctly via this field). Still set (to
+    // the first tender) even when `payments` is used.
     source: { type: String, enum: ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'], default: 'cash' },
+    // multi-tender breakdown of the paid portion, e.g. bKash 2000 + Cash 3000.
+    // Empty for older/legacy single-tender purchases — those fall back to
+    // paid+source, same dual-path pattern already used for Sale.payments[].
+    payments: { type: [purchasePaymentLineSchema], default: [] },
     // 'purchase' = goods received, 'payment' = a standalone payment against due,
     // 'adjustment' = the owner corrected the due directly (no goods, no money —
     // `total`/`due` hold the signed correction and `paid` stays 0, so reports

@@ -7,6 +7,7 @@ import mongoose from 'mongoose';
 import { connectDB } from '../config/db.js';
 import User from '../models/User.js';
 import Business from '../models/Business.js';
+import Branch from '../models/Branch.js';
 import Product from '../models/Product.js';
 import Customer from '../models/Customer.js';
 import Employee from '../models/Employee.js';
@@ -18,7 +19,7 @@ const run = async () => {
   console.log('🌱 Seeding...');
 
   await Promise.all([
-    User.deleteMany({}), Business.deleteMany({}),
+    User.deleteMany({}), Business.deleteMany({}), Branch.deleteMany({}),
     Product.deleteMany({}), Customer.deleteMany({}), Employee.deleteMany({}),
     Supplier.deleteMany({}), PhoneUnit.deleteMany({}),
   ]);
@@ -50,12 +51,17 @@ const run = async () => {
   });
   owner.business = business._id;
   await owner.save();
+  // Every branch-scoped model (Product/PhoneUnit/Sale/...) requires a branch
+  // since Phase 25 — the live app gets this from `ensureMainBranches()` at
+  // server boot, but this seed script creates fresh businesses directly, so
+  // it needs its own Main Branch per business too.
+  const branch = await Branch.create({ business: business._id, name: 'Main Branch', isMainBranch: true });
 
   await Product.insertMany([
-    { business: business._id, name: 'Napa 500mg', category: 'Medicine', purchasePrice: 0.8, sellingPrice: 1, discountPercent: 10, stock: 200, lowStockAlert: 50, unit: 'pcs', expiryDate: new Date(Date.now() + 200 * 864e5), batchNo: 'B-2026A' },
-    { business: business._id, name: 'Seclo 20mg', category: 'Medicine', purchasePrice: 5, sellingPrice: 7, stock: 40, lowStockAlert: 30, unit: 'pcs', expiryDate: new Date(Date.now() + 20 * 864e5), batchNo: 'B-2026B' },
-    { business: business._id, name: 'Hand Sanitizer', category: 'General', purchasePrice: 60, sellingPrice: 90, stock: 12, lowStockAlert: 10 },
-    { business: business._id, name: 'Saline IV', category: 'Medicine', purchasePrice: 70, sellingPrice: 100, stock: 5, lowStockAlert: 10, expiryDate: new Date(Date.now() - 5 * 864e5), batchNo: 'B-2025X' },
+    { business: business._id, branch: branch._id, name: 'Napa 500mg', category: 'Medicine', purchasePrice: 0.8, sellingPrice: 1, discountPercent: 10, stock: 200, lowStockAlert: 50, unit: 'pcs', expiryDate: new Date(Date.now() + 200 * 864e5), batchNo: 'B-2026A' },
+    { business: business._id, branch: branch._id, name: 'Seclo 20mg', category: 'Medicine', purchasePrice: 5, sellingPrice: 7, stock: 40, lowStockAlert: 30, unit: 'pcs', expiryDate: new Date(Date.now() + 20 * 864e5), batchNo: 'B-2026B' },
+    { business: business._id, branch: branch._id, name: 'Hand Sanitizer', category: 'General', purchasePrice: 60, sellingPrice: 90, stock: 12, lowStockAlert: 10 },
+    { business: business._id, branch: branch._id, name: 'Saline IV', category: 'Medicine', purchasePrice: 70, sellingPrice: 100, stock: 5, lowStockAlert: 10, expiryDate: new Date(Date.now() - 5 * 864e5), batchNo: 'B-2025X' },
   ]);
 
   await Customer.insertMany([
@@ -85,20 +91,21 @@ const run = async () => {
   });
   mobileOwner.business = mobileBiz._id;
   await mobileOwner.save();
+  const mobileBranch = await Branch.create({ business: mobileBiz._id, name: 'Main Branch', isMainBranch: true });
 
   const iphone = await Product.create({
-    business: mobileBiz._id, name: 'iPhone 15 Pro', category: 'Mobile', brand: 'Apple',
+    business: mobileBiz._id, branch: mobileBranch._id, name: 'iPhone 15 Pro', category: 'Mobile', brand: 'Apple',
     storage: '128GB', color: 'Black', trackSerial: true, purchasePrice: 140000, sellingPrice: 165000,
     warrantyBrandMonths: 12, warrantyShopMonths: 3, unit: 'pcs', lowStockAlert: 2,
   });
   await Product.create({
-    business: mobileBiz._id, name: 'USB-C Cable', category: 'Accessory', purchasePrice: 200,
+    business: mobileBiz._id, branch: mobileBranch._id, name: 'USB-C Cable', category: 'Accessory', purchasePrice: 200,
     sellingPrice: 350, stock: 50, lowStockAlert: 10, unit: 'pcs',
   });
   await PhoneUnit.insertMany([
-    { business: mobileBiz._id, product: iphone._id, imei1: '356789012345671', imei2: '356789012345672', status: 'in_stock' },
-    { business: mobileBiz._id, product: iphone._id, imei1: '356789012345681', imei2: '356789012345682', status: 'in_stock' },
-    { business: mobileBiz._id, product: iphone._id, imei1: '356789012345691', status: 'in_stock' },
+    { business: mobileBiz._id, branch: mobileBranch._id, product: iphone._id, imei1: '356789012345671', imei2: '356789012345672', status: 'in_stock' },
+    { business: mobileBiz._id, branch: mobileBranch._id, product: iphone._id, imei1: '356789012345681', imei2: '356789012345682', status: 'in_stock' },
+    { business: mobileBiz._id, branch: mobileBranch._id, product: iphone._id, imei1: '356789012345691', status: 'in_stock' },
   ]);
   iphone.stock = 3;
   await iphone.save();

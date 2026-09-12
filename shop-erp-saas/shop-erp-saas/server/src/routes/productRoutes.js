@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getProducts, getProductByBarcode, createProduct, createProductsWithSupplier, updateProduct, adjustProductStock, deleteProduct, getStockSnapshot, getProductReport } from '../controllers/productController.js';
+import { getProducts, getProductByBarcode, createProduct, createProductsWithSupplier, updateProduct, adjustProductStock, deleteProduct, getStockSnapshot, getProductReport, getProductPurchaseBatches } from '../controllers/productController.js';
 import { protect } from '../middleware/auth.js';
 import { requireBusiness, resolveBranch } from '../middleware/tenant.js';
 import { requireModule } from '../middleware/permissions.js';
@@ -12,5 +12,6 @@ router.get('/barcode/:code', getProductByBarcode);
 router.get('/stock-snapshot', getStockSnapshot);
 router.patch('/:id/stock', adjustProductStock);
 router.get('/:id/report', getProductReport);
+router.get('/:id/purchase-batches', getProductPurchaseBatches);
 router.route('/:id').put(updateProduct).delete(deleteProduct);
 export default router;

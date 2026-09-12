@@ -1,32 +1,43 @@
 import { useEffect, useState } from 'react';
-import { Plus, Pencil, Trash2, Search, AlertTriangle, Barcode, ScanLine, Tag, Printer, PackagePlus } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, AlertTriangle, Barcode, ScanLine, Tag, Printer, PackagePlus, History, TrendingUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
 import Modal from '../components/ui/Modal.jsx';
+import ComboBox from '../components/ui/ComboBox.jsx';
+import DropdownMenu from '../components/ui/DropdownMenu.jsx';
+import PaymentRows from '../components/ui/PaymentRows.jsx';
 import LabelPrintModal from '../components/print/LabelPrintModal.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import StockReport from '../components/print/StockReport.jsx';
 import StockReportByBrand from '../components/print/StockReportByBrand.jsx';
 import ProductStockReport from '../components/print/ProductStockReport.jsx';
-import { taka, fmtDate, expiryStatus, daysUntil } from '../utils/format.js';
+import { taka, fmtDate, fmtDateTime, expiryStatus, daysUntil } from '../utils/format.js';
 import { useConfirm } from '../context/ConfirmContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useScanner } from '../context/ScannerContext.jsx';
 
 const empty = {
-  name: '', sku: '', category: 'General', unit: 'pcs', purchasePrice: 0, sellingPrice: 0,
-  discountPercent: 0, stock: 0, lowStockAlert: 5, expiryDate: '', batchNo: '', returnable: true,
+  // Category starts blank (not a hardcoded "General"/"Mobile"/"Medicine") — the
+  // ComboBox still suggests every category already used, free-typing is still
+  // allowed, this just stops a new product silently landing in the wrong
+  // section when the shopkeeper forgets to change it.
+  name: '', sku: '', category: '', unit: 'pcs', purchasePrice: 0, sellingPrice: 0,
+  discountPercent: 0, stock: 0, lowStockAlert: 1, expiryDate: '', batchNo: '', returnable: true,
   // mobile-shop fields
   trackSerial: false, brand: '', color: '', storage: '', warrantyBrandMonths: 0, warrantyShopMonths: 0,
 };
 // one item block in the "Add Product" (create) flow — same shape as `empty`, plus a
 // raw IMEI/serial textarea so a serial-tracked item's units can be entered inline.
-const emptyItem = { ...empty, imeis: '' };
+// `existingProductId` set means this item RESTOCKS that product at a new price
+// instead of creating a duplicate — see the restock search box in ItemBlock.
+const emptyItem = { ...empty, imeis: '', existingProductId: null };
 const emptySupplier = { name: '', phone: '' };
-const emptyPurchase = { reference: '', note: '', paid: 0, source: 'cash' };
+const emptyPurchase = { reference: '', note: '', payments: [{ method: 'cash', amount: '', account: null }] };
 
 const isMedicineCat = (cat) => /medicine|medicin|drug|pharma/i.test(cat || '');
+// live count of how many IMEI/serial/unit-code lines have actually been typed/scanned
+const imeiCount = (text) => (text || '').split('\n').map((l) => l.trim()).filter(Boolean).length;
 const toDateInput = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
 const discounted = (p) => Math.round((p.sellingPrice * (1 - (p.discountPercent || 0) / 100)) * 100) / 100;
 // how many matches the search price panel shows before falling back to the table
@@ -46,6 +57,10 @@ export default function Products() {
   // Barcode / per-unit tracking is available to Mobile + General shops; Pharmacy
   // has no barcode system at all (per client request).
   const serialEnabled = !isPharmacy;
+  // New products' Low Stock Alert defaults to the business's own Settings value
+  // (Settings → Low Stock Alert), not a hardcoded number — this is the fix for
+  // the sync bug where Settings said 1 but Products still defaulted to 5.
+  const defaultLowStock = business?.settings?.lowStockThreshold ?? 1;
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
@@ -60,10 +75,29 @@ export default function Products() {
   const [items, setItems] = useState([emptyItem]);
   const [supplier, setSupplier] = useState(emptySupplier);
   const [purchase, setPurchase] = useState(emptyPurchase);
+  // "Paid Now" auto-sums to the purchase total until the owner types into it
+  // themselves — see the effect below.
+  const [paidTouched, setPaidTouched] = useState(false);
   const [supplierList, setSupplierList] = useState([]);
+  // main search box now shows a quick suggestion dropdown too (smart search,
+  // req 2) — reuses whatever `products` already holds for the current search
+  // term, no extra fetch needed.
+  const [searchFocused, setSearchFocused] = useState(false);
+  // Item Purchase Rate Information — search a product, then show every
+  // purchase-batch event recorded for it (date/qty/rate/last rate).
+  const [rateSearchOpen, setRateSearchOpen] = useState(false);
+  const [rateSearch, setRateSearch] = useState('');
+  const [rateSuggestions, setRateSuggestions] = useState([]);
+  const [rateLoading, setRateLoading] = useState(false);
+  const [rateInfo, setRateInfo] = useState(null); // { product, batches, lastPurchaseRate }
+  const [rateInfoOpen, setRateInfoOpen] = useState(false);
+  // Stock Print (by Supplier) — optional single-supplier scope, "" = all suppliers
+  const [stockReportSupplier, setStockReportSupplier] = useState('');
+  const [stockSupplierPickerOpen, setStockSupplierPickerOpen] = useState(false);
   const [unitsFor, setUnitsFor] = useState(null); // product whose IMEIs are being managed
   const [stockFor, setStockFor] = useState(null); // product whose quantity is being adjusted
   const [labelFor, setLabelFor] = useState(null); // product whose barcode labels are being printed
+  const [priceFor, setPriceFor] = useState(null); // product whose price is being updated (restock at a new price)
   const [scanCode, setScanCode] = useState('');
   const [saving, setSaving] = useState(false);
   // Stock Print — one-click in-stock report grouped by supplier, respecting
@@ -109,6 +143,31 @@ export default function Products() {
     setModelLoading(false);
   };
 
+  // Item Purchase Rate Information — same search-then-pick pattern as Stock
+  // Print by Model, but showing the raw per-purchase-event history instead of
+  // the sold/supplier-breakdown report.
+  useEffect(() => {
+    if (!rateSearchOpen || !rateSearch.trim()) { setRateSuggestions([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const { data } = await api.get('/products', { params: { search: rateSearch.trim() } });
+        setRateSuggestions(data.data.products.slice(0, 8));
+      } catch { /* ignore — suggestions are best-effort */ }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [rateSearch, rateSearchOpen]);
+
+  const pickRateInfo = async (p) => {
+    setRateLoading(true);
+    try {
+      const { data } = await api.get(`/products/${p._id}/purchase-batches`);
+      setRateInfo({ product: p, ...data.data });
+      setRateSearchOpen(false); setRateSearch(''); setRateSuggestions([]);
+      setRateInfoOpen(true);
+    } catch (e) { toast.error(e.response?.data?.message || 'Failed to load purchase history'); }
+    setRateLoading(false);
+  };
+
   const load = async () => {
     const { data } = await api.get('/products', { params: { search, category: categoryFilter || undefined } });
     setProducts(data.data.products);
@@ -119,15 +178,16 @@ export default function Products() {
 
   // Whenever the Topbar's phone scanner is connected, every code it scans lands
   // here — same handling as typing into the "Scan barcode" box above. Paused
-  // whenever ANY product modal is open (Manage IMEIs, or the Add/Edit Product
-  // form) — those take over the connection themselves below, because reading
-  // an unrecognized code (a device IMEI) as a product barcode here would 404
-  // and silently replace whatever form is already open with a fresh
-  // "create product" prefill — exactly the confusing behavior being avoided.
+  // whenever ANY product modal is open (Manage IMEIs, Update Price, or the
+  // Add/Edit Product form) — those take over the connection themselves below,
+  // because reading an unrecognized code (a device IMEI) as a product barcode
+  // here would 404 and silently replace whatever form is already open with a
+  // fresh "create product" prefill — exactly the confusing behavior being
+  // avoided.
   const { subscribe: subscribeScanner } = useScanner();
   useEffect(() => (
-    serialEnabled && !unitsFor && !modal ? subscribeScanner((code) => onScan(code)) : undefined
-  ), [subscribeScanner, serialEnabled, unitsFor, modal]);
+    serialEnabled && !unitsFor && !modal && !priceFor ? subscribeScanner((code) => onScan(code)) : undefined
+  ), [subscribeScanner, serialEnabled, unitsFor, modal, priceFor]);
 
   // While the Add/Edit Product modal is open, a scanned code is far more useful
   // filling in whatever's being entered there than looked up against the whole
@@ -151,11 +211,14 @@ export default function Products() {
 
   // One click: every in-stock product (for the currently selected category, or
   // all of them), grouped by supplier/dealer so it's clear whose stock is whose.
+  // `stockReportSupplier` optionally narrows this to just one supplier instead
+  // of "all suppliers grouped" (req: All Suppliers / Individual Supplier).
   const openStockReport = async () => {
     setStockReportLoading(true);
     try {
       const { data } = await api.get('/products', { params: { category: categoryFilter || undefined } });
-      const inStock = data.data.products.filter((p) => p.stock > 0);
+      let inStock = data.data.products.filter((p) => p.stock > 0);
+      if (stockReportSupplier) inStock = inStock.filter((p) => p.supplier?._id === stockReportSupplier);
       const bySupplier = {};
       for (const p of inStock) {
         const key = p.supplier?.name || '— No Supplier —';
@@ -226,8 +289,8 @@ export default function Products() {
     } catch (e) {
       if (e.response?.status === 404) {
         // unknown barcode → start a new product prefilled with this barcode
-        setItems([{ ...emptyItem, category: isMobile ? 'Mobile' : (business?.type === 'pharmacy' ? 'Medicine' : 'General'), trackSerial: isMobile, barcode: code }]);
-        setSupplier(emptySupplier); setPurchase(emptyPurchase);
+        setItems([{ ...emptyItem, category: '', lowStockAlert: defaultLowStock, trackSerial: isMobile, barcode: code }]);
+        setSupplier(emptySupplier); setPurchase(emptyPurchase); setPaidTouched(false);
         setEditId(null); setModal(true); setScanCode('');
         toast('New barcode — create the product', { icon: '🆕' });
       } else {
@@ -237,17 +300,50 @@ export default function Products() {
   };
 
   const openNew = () => {
-    setItems([{ ...emptyItem, category: isMobile ? 'Mobile' : (business?.type === 'pharmacy' ? 'Medicine' : 'General'), trackSerial: isMobile }]);
-    setSupplier(emptySupplier); setPurchase(emptyPurchase);
+    setItems([{ ...emptyItem, category: '', lowStockAlert: defaultLowStock, trackSerial: isMobile }]);
+    setSupplier(emptySupplier); setPurchase(emptyPurchase); setPaidTouched(false);
     setEditId(null); setModal(true);
   };
   const openEdit = (p) => { setForm({ ...empty, ...p, supplier: p.supplier?._id || '', expiryDate: toDateInput(p.expiryDate) }); setEditId(p._id); setModal(true); };
+
+  // Restock an existing product instead of creating a duplicate — picking one
+  // fills its identity fields (shown read-only) and defaults this batch's
+  // price to whatever the product is currently priced at, still fully
+  // editable; picking "Switch to New Product" clears back to a blank item.
+  const pickRestock = (index, product) => {
+    setItems((arr) => arr.map((it, i) => {
+      if (i !== index) return it;
+      if (!product) return { ...emptyItem, category: '', lowStockAlert: defaultLowStock, trackSerial: isMobile };
+      return {
+        ...emptyItem,
+        existingProductId: product._id,
+        name: product.name, category: product.category, sku: product.sku || '', barcode: product.barcode || '',
+        unit: product.unit || 'pcs', trackSerial: !!product.trackSerial,
+        brand: product.brand || '', color: product.color || '', storage: product.storage || '',
+        warrantyBrandMonths: product.warrantyBrandMonths || 0, warrantyShopMonths: product.warrantyShopMonths || 0,
+        purchasePrice: product.purchasePrice || 0, sellingPrice: product.sellingPrice || 0,
+      };
+    }));
+  };
+
+  // "Paid Now" (req 3): auto-sums to the purchase total as items change, but
+  // only until the owner actually types into a payment row themselves —
+  // PaymentRows' onChange marks `paidTouched`, this effect never fires again
+  // after that so a manual edit is never silently overwritten.
+  const purchaseTotal = items.reduce((s, it) => {
+    const q = it.trackSerial ? it.imeis.split('\n').map((l) => l.trim()).filter(Boolean).length : (Number(it.stock) || 0);
+    return s + (Number(it.purchasePrice) || 0) * q;
+  }, 0);
+  useEffect(() => {
+    if (paidTouched) return;
+    setPurchase((p) => (p.payments.length === 1 ? { ...p, payments: [{ ...p.payments[0], amount: purchaseTotal || '' }] } : p));
+  }, [purchaseTotal, paidTouched]);
 
   const requiresExpiry = isMedicineCat(form.category);
 
   // ---- create-mode item list helpers ----
   const setItemField = (i, k, v) => setItems((arr) => arr.map((it, idx) => idx === i ? { ...it, [k]: v } : it));
-  const addItemBlock = () => setItems((arr) => [...arr, { ...emptyItem, category: isMobile ? 'Mobile' : (business?.type === 'pharmacy' ? 'Medicine' : 'General'), trackSerial: isMobile }]);
+  const addItemBlock = () => setItems((arr) => [...arr, { ...emptyItem, category: '', lowStockAlert: defaultLowStock, trackSerial: isMobile }]);
   const removeItemBlock = (i) => setItems((arr) => arr.length > 1 ? arr.filter((_, idx) => idx !== i) : arr);
 
   const saveEdit = async () => {
@@ -273,16 +369,23 @@ export default function Products() {
 
   const saveNew = async () => {
     for (const it of items) {
+      if (it.existingProductId) {
+        // Restocking: name/category etc. come from the picked product, only
+        // the batch's own numbers need checking.
+        if (it.trackSerial && !it.imeis.trim()) return toast.error(`Add at least one ${isMobile ? 'IMEI/serial' : 'unit code'} to restock ${it.name}`);
+        continue;
+      }
       if (!it.name.trim()) return toast.error('Every item needs a name');
       if (isMedicineCat(it.category) && !it.expiryDate) return toast.error(`Expiry date is required for medicine: ${it.name}`);
       if (Number(it.discountPercent) < 0 || Number(it.discountPercent) > 100) return toast.error('Discount must be between 0 and 100%');
       if (it.trackSerial && !it.imeis.trim()) return toast.error(`Add at least one ${isMobile ? 'IMEI/serial' : 'unit code'} for ${it.name}`);
     }
+    const anyRestock = items.some((it) => it.existingProductId);
     setSaving(true);
     try {
       const supplierName = supplier.name.trim();
-      if (!supplierName && items.length === 1) {
-        // no supplier + a single item → identical to the original simple Add Product flow
+      if (!supplierName && items.length === 1 && !anyRestock) {
+        // no supplier + a single new item → identical to the original simple Add Product flow
         const it = items[0];
         const payload = {
           ...it,
@@ -298,9 +401,10 @@ export default function Products() {
           if (units.length) await api.post('/units', { product: data.data.product._id, units });
         }
       } else {
-        if (!supplierName) return toast.error('Supplier / dealer name is required when adding more than one item');
+        if (!supplierName) return toast.error(anyRestock ? 'Supplier / dealer name is required to restock a product' : 'Supplier / dealer name is required when adding more than one item');
+        const payments = purchase.payments.filter((p) => Number(p.amount) > 0).map((p) => ({ method: p.method, amount: +p.amount || 0, account: p.account }));
         await api.post('/products/batch-with-supplier', {
-          supplierName, supplierPhone: supplier.phone, ...purchase, paid: +purchase.paid || 0,
+          supplierName, supplierPhone: supplier.phone, reference: purchase.reference, note: purchase.note, payments,
           items: items.map((it) => ({
             ...it,
             purchasePrice: +it.purchasePrice, sellingPrice: +it.sellingPrice, discountPercent: +it.discountPercent || 0,
@@ -311,7 +415,7 @@ export default function Products() {
           })),
         });
       }
-      toast.success('Saved'); setModal(false); load();
+      toast.success(anyRestock ? 'Stock updated' : 'Saved'); setModal(false); load();
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
     setSaving(false);
   };
@@ -377,6 +481,9 @@ export default function Products() {
         {!r.trackSerial && (
           <button onClick={() => setStockFor(r)} className="btn-ghost p-1.5 text-brand-600" title="Add / adjust quantity"><PackagePlus size={15} /></button>
         )}
+        {/* Restock this exact product at a new price — no supplier re-entry,
+            reuses whatever supplier it already has (req 1). */}
+        <button onClick={() => setPriceFor(r)} className="btn-ghost p-1.5 text-emerald-600" title="Update Price"><TrendingUp size={15} /></button>
         {serialEnabled && <button onClick={() => setLabelFor(r)} className="btn-ghost p-1.5" title="Print barcode label"><Tag size={15} /></button>}
         {serialEnabled && r.trackSerial && (
           <button onClick={() => setUnitsFor(r)} className="btn-ghost p-1.5" title={isMobile ? 'Manage IMEIs' : 'Manage unit codes'}><Barcode size={15} /></button>
@@ -392,9 +499,16 @@ export default function Products() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Products</h1>
         <div className="flex gap-2 flex-wrap">
-          <button className="btn-ghost" onClick={() => setModelSearchOpen(true)}><Printer size={18} /> Stock Print by Model</button>
-          <button className="btn-ghost" disabled={brandReportLoading} onClick={openBrandReport}><Printer size={18} /> Stock Print by Brands</button>
-          <button className="btn-ghost" disabled={stockReportLoading} onClick={openStockReport}><Printer size={18} /> Stock Print</button>
+          <DropdownMenu
+            label="Stock Print"
+            icon={Printer}
+            items={[
+              { label: 'Stock Print (by Supplier)', icon: Printer, onClick: () => setStockSupplierPickerOpen(true), disabled: stockReportLoading },
+              { label: 'Stock Print by Brands', icon: Printer, onClick: openBrandReport, disabled: brandReportLoading },
+              { label: 'Stock Print by Model', icon: Search, onClick: () => setModelSearchOpen(true) },
+              { label: 'Item Purchase Rate Information', icon: History, onClick: () => setRateSearchOpen(true) },
+            ]}
+          />
           <button className="btn-primary" onClick={openNew}><Plus size={18} /> Add Product</button>
         </div>
       </div>
@@ -402,7 +516,32 @@ export default function Products() {
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1 max-w-sm">
           <Search size={18} className="absolute left-3 top-2.5 text-slate-400" />
-          <input className="input pl-10" placeholder={serialEnabled ? 'Search name / SKU / barcode / IMEI...' : 'Search name / SKU...'} value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input
+            className="input pl-10"
+            placeholder={serialEnabled ? 'Search name / category / storage / IMEI...' : 'Search name / category...'}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setTimeout(() => setSearchFocused(false), 150)}
+          />
+          {/* smart-search suggestions while typing a name (req 2) — reuses the
+              already-fetched matches, no extra request */}
+          {searchFocused && search.trim() && products.length > 0 && (
+            <div className="absolute z-30 mt-1 w-full max-h-64 overflow-y-auto rounded-lg border border-brand-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg">
+              {products.slice(0, 8).map((p) => (
+                <button
+                  key={p._id}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => { setSearchFocused(false); openEdit(p); }}
+                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-brand-50 dark:hover:bg-slate-700/50 flex items-center justify-between gap-2"
+                >
+                  <span className="truncate">{p.name}</span>
+                  <span className="text-xs text-slate-400 shrink-0">{p.category}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <select className="input sm:!w-52" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
           <option value="">All Categories</option>
@@ -473,8 +612,6 @@ export default function Products() {
       )}
 
       <DataTable columns={columns} rows={products} />
-      {/* shared combobox options for the Category field (Edit form + create Item blocks) */}
-      <datalist id="category-options">{categoryOptions.map((c) => <option key={c} value={c} />)}</datalist>
 
       <Modal open={modal} onClose={() => setModal(false)} title={editId ? 'Edit Product' : 'Add Product'} size="lg"
         footer={<>
@@ -494,7 +631,7 @@ export default function Products() {
             <div><label className="label">SKU / Product Code</label><input className="input" value={form.sku || ''} onChange={set('sku')} placeholder="Optional" /></div>
             <div>
               <label className="label">Category</label>
-              <input className="input" list="category-options" value={form.category} onChange={set('category')} />
+              <ComboBox value={form.category} onChange={(v) => setForm({ ...form, category: v })} options={categoryOptions} placeholder="Category" />
             </div>
             <div><label className="label">Unit</label><input className="input" value={form.unit} onChange={set('unit')} /></div>
             <div className="col-span-2">
@@ -568,12 +705,12 @@ export default function Products() {
         ) : (
           <div className="space-y-3">
             {items.map((it, i) => (
-              <ItemBlock key={i} item={it} index={i} onChange={setItemField} onRemove={removeItemBlock} canRemove={items.length > 1} isMobile={isMobile} serialEnabled={serialEnabled} />
+              <ItemBlock key={i} item={it} index={i} onChange={setItemField} onRemove={removeItemBlock} canRemove={items.length > 1} isMobile={isMobile} serialEnabled={serialEnabled} categoryOptions={categoryOptions} onPickRestock={pickRestock} />
             ))}
             <button type="button" className="btn-ghost" onClick={addItemBlock}><Plus size={15} /> Add Item</button>
 
             <div className="border-t border-slate-200 dark:border-slate-700 pt-3 space-y-3">
-              <p className="text-sm font-semibold">Supplier / Dealer (optional)</p>
+              <p className="text-sm font-semibold">Supplier / Dealer {items.some((it) => it.existingProductId) ? '' : '(optional)'}</p>
               <p className="text-xs text-slate-400">Record which supplier/dealer these items came from — auto-creates a purchase entry visible on the Suppliers page. Leave blank to just add the product(s) with no purchase record.</p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -584,15 +721,25 @@ export default function Products() {
                 <div><label className="label">Phone</label><input className="input" value={supplier.phone} onChange={(e) => setSupplier({ ...supplier, phone: e.target.value })} /></div>
               </div>
               {supplier.name.trim() && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div><label className="label">Reference / Memo No</label><input className="input" value={purchase.reference} onChange={(e) => setPurchase({ ...purchase, reference: e.target.value })} /></div>
-                  <div><label className="label">Note</label><input className="input" value={purchase.note} onChange={(e) => setPurchase({ ...purchase, note: e.target.value })} /></div>
-                  <div><label className="label">Paid Now</label><input className="input" type="number" value={purchase.paid} onChange={(e) => setPurchase({ ...purchase, paid: e.target.value })} /></div>
-                  <div><label className="label">Paid From</label>
-                    <select className="input" value={purchase.source} onChange={(e) => setPurchase({ ...purchase, source: e.target.value })}>
-                      <option value="cash">Cash</option><option value="bank">Bank</option><option value="bkash">bKash</option>
-                      <option value="nagad">Nagad</option><option value="rocket">Rocket</option><option value="card">Card</option>
-                    </select>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className="label">Reference / Memo No</label><input className="input" value={purchase.reference} onChange={(e) => setPurchase({ ...purchase, reference: e.target.value })} /></div>
+                    <div><label className="label">Note</label><input className="input" value={purchase.note} onChange={(e) => setPurchase({ ...purchase, note: e.target.value })} /></div>
+                  </div>
+                  <div className="flex items-center justify-between text-sm font-semibold">
+                    <span>Total</span><span>{taka(purchaseTotal)}</span>
+                  </div>
+                  <div>
+                    <label className="label">Paid Now (split across methods if needed)</label>
+                    <PaymentRows
+                      rows={purchase.payments}
+                      total={purchaseTotal}
+                      onChange={(rows) => { setPaidTouched(true); setPurchase({ ...purchase, payments: rows }); }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-sm text-red-500">
+                    <span>Due</span>
+                    <span className="font-semibold">{taka(Math.max(0, purchaseTotal - purchase.payments.reduce((s, p) => s + (Number(p.amount) || 0), 0)))}</span>
                   </div>
                 </div>
               )}
@@ -604,6 +751,21 @@ export default function Products() {
       {stockFor && <StockAdjustModal product={stockFor} onClose={() => setStockFor(null)} onChanged={load} />}
       {unitsFor && <UnitsModal product={unitsFor} isMobile={isMobile} onClose={() => setUnitsFor(null)} onChanged={load} />}
       {labelFor && <LabelPrintModal product={labelFor} business={business} isMobile={isMobile} onClose={() => setLabelFor(null)} onChanged={load} />}
+      {priceFor && <UpdatePriceModal product={priceFor} isMobile={isMobile} onClose={() => setPriceFor(null)} onChanged={load} />}
+
+      {/* Stock Print by Supplier — pick "All Suppliers" (the existing grouped
+          report) or narrow to one specific supplier before printing. */}
+      <Modal open={stockSupplierPickerOpen} onClose={() => setStockSupplierPickerOpen(false)} title="Stock Print by Supplier"
+        footer={<>
+          <button className="btn-ghost" onClick={() => setStockSupplierPickerOpen(false)}>Cancel</button>
+          <button className="btn-primary" disabled={stockReportLoading} onClick={async () => { setStockSupplierPickerOpen(false); await openStockReport(); }}>Print</button>
+        </>}>
+        <label className="label">Supplier</label>
+        <select className="input" value={stockReportSupplier} onChange={(e) => setStockReportSupplier(e.target.value)}>
+          <option value="">All Suppliers</option>
+          {supplierList.map((s) => <option key={s._id} value={s._id}>{s.name}</option>)}
+        </select>
+      </Modal>
 
       <PrintWrapper open={stockReportOpen} onClose={() => setStockReportOpen(false)} title="Stock Report">
         {stockReport && <StockReport business={business} category={stockReport.category} groups={stockReport.groups} />}
@@ -671,6 +833,87 @@ export default function Products() {
           />
         )}
       </PrintWrapper>
+
+      {/* Item Purchase Rate Information — search a product, then show every
+          purchase-batch event recorded for it (date/qty/rate/last rate). */}
+      <Modal open={rateSearchOpen} onClose={() => { setRateSearchOpen(false); setRateSearch(''); setRateSuggestions([]); }} title="Item Purchase Rate Information">
+        <div className="relative">
+          <Search size={18} className="absolute left-3 top-2.5 text-slate-400" />
+          <input
+            autoFocus
+            className="input pl-10"
+            placeholder="Type a product name..."
+            value={rateSearch}
+            onChange={(e) => setRateSearch(e.target.value)}
+          />
+          {rateSuggestions.length > 0 && (
+            <div className="mt-1 max-h-72 overflow-y-auto rounded-lg border border-brand-200 dark:border-slate-700 divide-y divide-brand-200 dark:divide-slate-700">
+              {rateSuggestions.map((p) => (
+                <button
+                  key={p._id}
+                  type="button"
+                  disabled={rateLoading}
+                  onClick={() => pickRateInfo(p)}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-between gap-2"
+                >
+                  <span className="truncate">
+                    <span className="font-medium">{p.name}</span>
+                    <span className="text-slate-400 ml-1">{p.category}</span>
+                  </span>
+                  <span className="text-xs text-slate-400 shrink-0">{p.stock} pcs</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {rateSearch.trim() && rateSuggestions.length === 0 && (
+            <p className="text-sm text-slate-400 mt-2">No matching product</p>
+          )}
+        </div>
+      </Modal>
+
+      <Modal open={rateInfoOpen} onClose={() => setRateInfoOpen(false)} title={rateInfo ? `Purchase Rate — ${rateInfo.product.name}` : 'Purchase Rate Information'} size="lg"
+        footer={<button className="btn-ghost" onClick={() => setRateInfoOpen(false)}>Close</button>}>
+        {rateInfo && (
+          <>
+            <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-800 rounded-lg p-3 mb-3">
+              <span className="text-sm">Current / reference price</span>
+              <span className="font-semibold">
+                {canViewBuyPrice && <>Buy {taka(rateInfo.product.purchasePrice)} · </>}Sell {taka(rateInfo.product.sellingPrice)}
+              </span>
+            </div>
+            {rateInfo.batches.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-6">No purchase batches recorded yet for this product.</p>
+            ) : (
+              <div className="max-h-96 overflow-y-auto border border-brand-200 dark:border-slate-700 rounded-lg">
+                <table className="w-full text-sm">
+                  <thead className="bg-brand-50 dark:bg-slate-700/50 text-left">
+                    <tr>
+                      <th className="px-3 py-2">Date</th>
+                      <th className="px-3 py-2">Supplier</th>
+                      <th className="px-3 py-2 text-right">Qty</th>
+                      <th className="px-3 py-2 text-right">Remaining</th>
+                      {canViewBuyPrice && <th className="px-3 py-2 text-right">Purchase Rate</th>}
+                      <th className="px-3 py-2 text-right">Selling Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rateInfo.batches.map((b) => (
+                      <tr key={b._id} className="border-t border-brand-200 dark:border-slate-700">
+                        <td className="px-3 py-2">{fmtDateTime(b.purchaseDate)}</td>
+                        <td className="px-3 py-2">{b.supplier?.name || '—'}</td>
+                        <td className="px-3 py-2 text-right">{b.qtyPurchased}</td>
+                        <td className="px-3 py-2 text-right">{b.qtyRemaining}</td>
+                        {canViewBuyPrice && <td className="px-3 py-2 text-right">{b.purchasePrice != null ? taka(b.purchasePrice) : '—'}</td>}
+                        <td className="px-3 py-2 text-right">{taka(b.sellingPrice)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </Modal>
     </div>
   );
 }
@@ -678,10 +921,52 @@ export default function Products() {
 // One product's fields inside the Add Product (create) flow — a repeatable block so
 // several items from the same supplier delivery can be entered in one go, each with
 // its own inline IMEI/serial box instead of a separate save-then-add-units step.
-function ItemBlock({ item, index, onChange, onRemove, canRemove, isMobile, serialEnabled }) {
+// `item.existingProductId` set means this item RESTOCKS that product at a new
+// price (price history, req 2) instead of creating a duplicate — its identity
+// fields (name/category/etc.) come from the picked product and are shown
+// read-only; only the batch's own Purchase Price / Selling Price / quantity
+// are editable, since every other field on an existing product is left alone.
+function ItemBlock({ item, index, onChange, onRemove, canRemove, isMobile, serialEnabled, categoryOptions, onPickRestock }) {
   const set = (k) => (e) => onChange(index, k, e.target.value);
   const setChk = (k) => (e) => onChange(index, k, e.target.checked);
   const requiresExpiry = isMedicineCat(item.category);
+
+  if (item.existingProductId) {
+    return (
+      <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-3 relative">
+        {canRemove && (
+          <button type="button" className="absolute top-2 right-2 text-red-500" onClick={() => onRemove(index)} title="Remove item"><Trash2 size={15} /></button>
+        )}
+        <div className="pr-6 space-y-3">
+          <div className="bg-brand-50 dark:bg-slate-800 rounded-lg p-2.5 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">Restocking: {item.name}</p>
+              <p className="text-xs text-slate-400 truncate">{[item.category, item.brand, item.storage, item.color].filter(Boolean).join(' • ') || '—'}</p>
+            </div>
+            <button type="button" className="btn-ghost text-xs shrink-0" onClick={() => onPickRestock(index, null)}>Switch to New Product</button>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="label">Purchase Price (this batch)</label><input className="input" type="number" value={item.purchasePrice} onChange={set('purchasePrice')} /></div>
+            <div><label className="label">Selling Price (this batch)</label><input className="input" type="number" value={item.sellingPrice} onChange={set('sellingPrice')} /></div>
+          </div>
+          <p className="text-xs text-slate-400">
+            Existing stock keeps its own old price — this only sets the price for the new units being added now.
+          </p>
+          {item.trackSerial ? (
+            <div>
+              <label className="label flex items-center justify-between">
+                <span>{isMobile ? 'IMEI / Serial (one per line)' : 'Unit Codes (one per line)'}</span>
+                <span className="text-brand-600 dark:text-brand-400 font-semibold">{imeiCount(item.imeis)} scanned</span>
+              </label>
+              <textarea className="input h-20 font-mono text-xs" value={item.imeis} onChange={set('imeis')} placeholder={isMobile ? '356789...\n356790...' : 'code-001\ncode-002'} />
+            </div>
+          ) : (
+            <div><label className="label">Quantity received</label><input className="input" type="number" value={item.stock} onChange={set('stock')} /></div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-3 relative">
@@ -694,7 +979,7 @@ function ItemBlock({ item, index, onChange, onRemove, canRemove, isMobile, seria
           <div><label className="label">Barcode</label><input className="input font-mono" value={item.barcode || ''} onChange={set('barcode')} placeholder="Auto-generated on save" /></div>
         )}
         <div><label className="label">SKU / Product Code</label><input className="input" value={item.sku || ''} onChange={set('sku')} placeholder="Optional" /></div>
-        <div><label className="label">Category</label><input className="input" list="category-options" value={item.category} onChange={set('category')} /></div>
+        <div><label className="label">Category</label><ComboBox value={item.category} onChange={(v) => onChange(index, 'category', v)} options={categoryOptions} placeholder="Category" /></div>
         <div><label className="label">Unit</label><input className="input" value={item.unit} onChange={set('unit')} /></div>
 
         {isMobile && (
@@ -729,7 +1014,10 @@ function ItemBlock({ item, index, onChange, onRemove, canRemove, isMobile, seria
 
         {item.trackSerial ? (
           <div className="col-span-2">
-            <label className="label">{isMobile ? 'IMEI / Serial (one per line)' : 'Unit Codes (one per line)'}</label>
+            <label className="label flex items-center justify-between">
+              <span>{isMobile ? 'IMEI / Serial (one per line)' : 'Unit Codes (one per line)'}</span>
+              <span className="text-brand-600 dark:text-brand-400 font-semibold">{imeiCount(item.imeis)} scanned</span>
+            </label>
             <textarea className="input h-20 font-mono text-xs" value={item.imeis} onChange={set('imeis')} placeholder={isMobile ? '356789...\n356790...' : 'code-001\ncode-002'} />
           </div>
         ) : (
@@ -927,7 +1215,10 @@ function UnitsModal({ product, isMobile, onClose, onChanged }) {
       )}
 
       <div className="mb-4">
-        <label className="label">Bulk add (one {isMobile ? 'IMEI' : 'code'} per line)</label>
+        <label className="label flex items-center justify-between">
+          <span>Bulk add (one {isMobile ? 'IMEI' : 'code'} per line)</span>
+          <span className="text-brand-600 dark:text-brand-400 font-semibold">{imeiCount(bulk)} scanned</span>
+        </label>
         <textarea className="input h-20" value={bulk} onChange={(e) => setBulk(e.target.value)} placeholder="356789...&#10;356790..." />
         <button className="btn-ghost mt-2" disabled={loading} onClick={addBulk}>Add All</button>
       </div>
@@ -977,6 +1268,97 @@ function UnitsModal({ product, isMobile, onClose, onChanged }) {
             ))}
           </tbody>
         </table>
+      </div>
+    </Modal>
+  );
+}
+
+// ---- Update Price (req 1): restock THIS product at a new price, one click
+// from its row — Purchase Price, Selling Price, then IMEI/serial (or plain
+// quantity), then Paid Now. No supplier field: the product already has one
+// from when it was first added, and the server (createProductsWithSupplier)
+// reuses it automatically when supplierName is left out. This is exactly the
+// same restock path the "Add Product" batch form's search box drives, just
+// reached directly from the product's own row instead of via a name search.
+function UpdatePriceModal({ product, isMobile, onClose, onChanged }) {
+  const [purchasePrice, setPurchasePrice] = useState(product.purchasePrice || 0);
+  const [sellingPrice, setSellingPrice] = useState(product.sellingPrice || 0);
+  const [imeis, setImeis] = useState('');
+  const [qty, setQty] = useState('');
+  const [payments, setPayments] = useState([{ method: 'cash', amount: '', account: null }]);
+  const [paidTouched, setPaidTouched] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const { subscribe } = useScanner();
+  useEffect(() => subscribe((code) => {
+    const value = code.trim();
+    if (value) setImeis((t) => (t ? `${t}\n${value}` : value));
+  }), [subscribe]);
+
+  const enteredQty = product.trackSerial ? imeiCount(imeis) : (Number(qty) || 0);
+  const total = (Number(purchasePrice) || 0) * enteredQty;
+  useEffect(() => {
+    if (paidTouched) return;
+    setPayments((ps) => (ps.length === 1 ? [{ ...ps[0], amount: total || '' }] : ps));
+  }, [total, paidTouched]);
+
+  const save = async () => {
+    if (product.trackSerial && imeiCount(imeis) === 0) {
+      return toast.error(`Add at least one ${isMobile ? 'IMEI/serial' : 'unit code'}`);
+    }
+    if (!product.trackSerial && (!qty || Number(qty) <= 0)) return toast.error('Enter a quantity');
+    setSaving(true);
+    try {
+      const cleanPayments = payments.map((p) => ({ ...p, amount: Number(p.amount) || 0 })).filter((p) => p.amount > 0);
+      await api.post('/products/batch-with-supplier', {
+        items: [{
+          existingProductId: product._id,
+          purchasePrice: Number(purchasePrice) || 0,
+          sellingPrice: Number(sellingPrice) || 0,
+          imeis: product.trackSerial
+            ? imeis.split('\n').map((l) => l.trim()).filter(Boolean).map((v) => (isMobile ? { imei1: v } : { serial: v }))
+            : [],
+          stock: product.trackSerial ? undefined : Number(qty) || 0,
+        }],
+        payments: cleanPayments,
+      });
+      toast.success('Price updated — new stock added');
+      onChanged?.(); onClose();
+    } catch (e) { toast.error(e.response?.data?.message || 'Error updating price'); }
+    setSaving(false);
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`Update Price — ${product.name}`}
+      footer={<>
+        <button className="btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn-primary" disabled={saving} onClick={save}>Save</button>
+      </>}>
+      <div className="space-y-3">
+        {product.supplier?.name && (
+          <p className="text-xs text-slate-400">Supplier: <span className="font-medium text-brand-500">{product.supplier.name}</span> (reused automatically — no need to re-enter)</p>
+        )}
+        <p className="text-xs text-slate-400">Existing stock keeps its own old price — this only sets the price for the new stock being added now.</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Updated Purchase Price</label><input className="input" type="number" value={purchasePrice} onChange={(e) => setPurchasePrice(e.target.value)} /></div>
+          <div><label className="label">Updated Selling Price</label><input className="input" type="number" value={sellingPrice} onChange={(e) => setSellingPrice(e.target.value)} /></div>
+        </div>
+        {product.trackSerial ? (
+          <div>
+            <label className="label flex items-center justify-between">
+              <span>{isMobile ? 'IMEI / Serial (one per line, or scan)' : 'Unit Codes (one per line, or scan)'}</span>
+              <span className="text-brand-600 dark:text-brand-400 font-semibold">{imeiCount(imeis)} scanned</span>
+            </label>
+            <textarea className="input h-24 font-mono text-xs" value={imeis} onChange={(e) => setImeis(e.target.value)} placeholder={isMobile ? '356789...\n356790...' : 'code-001\ncode-002'} />
+          </div>
+        ) : (
+          <div><label className="label">Quantity received</label><input className="input" type="number" value={qty} onChange={(e) => setQty(e.target.value)} /></div>
+        )}
+        <div className="flex justify-between text-sm font-medium"><span>Total</span><span>{taka(total)}</span></div>
+        <div>
+          <label className="label">Paid Now</label>
+          <PaymentRows rows={payments} onChange={(rows) => { setPaidTouched(true); setPayments(rows); }} total={total} />
+        </div>
       </div>
     </Modal>
   );

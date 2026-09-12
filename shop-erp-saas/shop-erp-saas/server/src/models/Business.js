@@ -13,7 +13,7 @@ const businessSchema = new mongoose.Schema(
     currency: { type: String, default: 'BDT' },
     footerWebsite: { type: String, default: 'https://futureflow.ai' },
     settings: {
-      lowStockThreshold: { type: Number, default: 5 },
+      lowStockThreshold: { type: Number, default: 1 },
       printMode: { type: String, enum: ['a4', 'thermal'], default: 'a4' },
       // Return & Exchange window in days (req 14) — past this, only owner/superadmin may process
       returnWindowDays: { type: Number, enum: [3, 7, 30], default: 7 },

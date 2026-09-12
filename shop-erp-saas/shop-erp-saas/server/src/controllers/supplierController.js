@@ -4,6 +4,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { ok, created } from '../utils/apiResponse.js';
 import { tenantFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
+import { resolveAccountId } from '../utils/paymentAccounts.js';
 import Supplier from '../models/Supplier.js';
 import Purchase from '../models/Purchase.js';
 import Product from '../models/Product.js';
@@ -55,16 +56,36 @@ export const supplierLedger = asyncHandler(async (req, res) => {
   ok(res, { supplier, entries });
 });
 
+// Normalizes an optional payments[] split-tender array (same dual-path
+// pattern already used for Sale/ServiceJob/createProductsWithSupplier): a
+// client sending >1 payment row gets the real split; one sending none falls
+// back to the legacy single `amount`+`source` pair, so older callers keep
+// working unchanged.
+async function normalizePayments(req, reqPayments, amountFallback, sourceFallback) {
+  const clean = (await Promise.all(
+    (Array.isArray(reqPayments) ? reqPayments : []).map(async (p) => ({
+      method: TENDERS.includes(p.method) ? p.method : 'cash',
+      amount: Number(p.amount) || 0,
+      account: await resolveAccountId(req, p.account),
+    }))
+  )).filter((p) => p.amount > 0);
+  const paidAmt = clean.length ? clean.reduce((s, p) => s + p.amount, 0) : Number(amountFallback || 0);
+  const primary = clean[0]?.method || (TENDERS.includes(sourceFallback) ? sourceFallback : 'cash');
+  const payments = clean.length ? clean : (paidAmt > 0 ? [{ method: primary, amount: paidAmt, account: null }] : []);
+  return { paidAmt, primary, payments };
+}
+
 // @route POST /api/suppliers/:id/purchase
-// body: { items:[{name, qty, unitCost}], reference, note, paid, source }
+// body: { items:[{name, qty, unitCost}], reference, note, paid?, source?, payments?:[{method,amount,account}] }
 export const recordPurchase = asyncHandler(async (req, res) => {
-  const { items = [], reference = '', note = '', paid = 0, source = 'cash' } = req.body;
+  const { items = [], reference = '', note = '', paid = 0, source = 'cash', payments: reqPayments = null } = req.body;
   const supplier = await Supplier.findOne(tenantFilter(req, { _id: req.params.id }));
   if (!supplier) throw new ApiError(404, 'Supplier not found');
 
   const total = items.reduce((s, it) => s + Number(it.unitCost || 0) * Number(it.qty || 0), 0);
   if (total <= 0) throw new ApiError(400, 'Purchase total must be greater than 0');
-  const paidAmt = Math.min(Number(paid || 0), total);
+  const { paidAmt: paidRaw, primary, payments } = await normalizePayments(req, reqPayments, paid, source);
+  const paidAmt = Math.min(paidRaw, total);
 
   const purchase = await Purchase.create({
     business: req.businessId,
@@ -76,7 +97,8 @@ export const recordPurchase = asyncHandler(async (req, res) => {
     total,
     paid: paidAmt,
     due: Math.max(0, total - paidAmt),
-    source: TENDERS.includes(source) ? source : 'cash',
+    source: primary,
+    payments,
     createdBy: req.user._id,
   });
 
@@ -88,13 +110,14 @@ export const recordPurchase = asyncHandler(async (req, res) => {
   created(res, { purchase, supplier });
 });
 
-// @route POST /api/suppliers/:id/pay  body: { amount, note, source }
+// @route POST /api/suppliers/:id/pay  body: { amount?, note, source?, payments?:[{method,amount,account}] }
 export const paySupplier = asyncHandler(async (req, res) => {
-  const { amount, note = '', source = 'cash' } = req.body;
-  const amt = Number(amount || 0);
-  if (amt <= 0) throw new ApiError(400, 'Payment amount must be greater than 0');
+  const { amount, note = '', source = 'cash', payments: reqPayments = null } = req.body;
   const supplier = await Supplier.findOne(tenantFilter(req, { _id: req.params.id }));
   if (!supplier) throw new ApiError(404, 'Supplier not found');
+
+  const { paidAmt: amt, primary, payments } = await normalizePayments(req, reqPayments, amount, source);
+  if (amt <= 0) throw new ApiError(400, 'Payment amount must be greater than 0');
 
   const payment = await Purchase.create({
     business: req.businessId,
@@ -106,7 +129,8 @@ export const paySupplier = asyncHandler(async (req, res) => {
     total: 0,
     paid: amt,
     due: 0,
-    source: TENDERS.includes(source) ? source : 'cash',
+    source: primary,
+    payments,
     createdBy: req.user._id,
   });
 

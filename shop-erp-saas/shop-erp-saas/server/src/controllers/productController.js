@@ -5,10 +5,12 @@ import { ok, created } from '../utils/apiResponse.js';
 import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import { canViewBuyPrice, hideBuyPrice } from '../utils/buyPrice.js';
+import { resolveAccountId } from '../utils/paymentAccounts.js';
 import Product from '../models/Product.js';
 import PhoneUnit from '../models/PhoneUnit.js';
 import Supplier from '../models/Supplier.js';
 import Purchase from '../models/Purchase.js';
+import PurchaseBatch from '../models/PurchaseBatch.js';
 import Sale from '../models/Sale.js';
 import StockSnapshot from '../models/StockSnapshot.js';
 
@@ -39,13 +41,21 @@ export const getProducts = asyncHandler(async (req, res) => {
     // IMEI that's already in stock expects to find the product it belongs to,
     // not just products matched by name/SKU/barcode. Scoped to the active branch
     // — a scanned/typed code should only resolve stock actually on this shelf.
+    const rx = { $regex: escapeRegex(search), $options: 'i' };
     const unitProductIds = await PhoneUnit.find(branchFilter(req, {
-      $or: [{ imei1: { $regex: search, $options: 'i' } }, { imei2: { $regex: search, $options: 'i' } }, { serial: { $regex: search, $options: 'i' } }],
+      $or: [{ imei1: rx }, { imei2: rx }, { serial: rx }],
     })).distinct('product');
     q.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { sku: { $regex: search, $options: 'i' } },
-      { barcode: { $regex: search, $options: 'i' } },
+      { name: rx },
+      { sku: rx },
+      { barcode: rx },
+      // "smart search" — also match category/brand/storage/color, so e.g.
+      // typing "128GB" or "Black" or a category name surfaces matches too,
+      // not just an exact product-name/SKU/barcode hit.
+      { category: rx },
+      { brand: rx },
+      { storage: rx },
+      { color: rx },
       ...(unitProductIds.length ? [{ _id: { $in: unitProductIds } }] : []),
     ];
   }
@@ -93,20 +103,60 @@ export const createProduct = asyncHandler(async (req, res) => {
 // Add one or more products in one go, all received from the same supplier/dealer —
 // auto-creates (or reuses) the Supplier and records a single stock-in Purchase
 // linking every created product, so it shows up in the Supplier dashboard/ledger.
+// Each item is either a brand-new product, OR an explicit restock of one the
+// caller already picked (`existingProductId`) — see the price-history note below.
 // body: { supplierName, supplierPhone?, reference?, note?, paid?, source?,
-//         items:[{ ...productFields, imeis?:[{imei1,imei2,serial}] }] }
+//         payments?:[{method,amount,account}],
+//         items:[{ existingProductId?, ...productFields, imeis?:[{imei1,imei2,serial}] }] }
+//
+// Price/stock history: buying the same product again at a different price must
+// NEVER change what's already on the shelf — a customer who bought at the old
+// price, or a unit sitting in stock from the earlier purchase, keeps its own
+// old cost/selling price forever. Every purchase event here creates a
+// `PurchaseBatch` row (the historical record) and, for serial-tracked items,
+// stamps that event's price directly onto the new `PhoneUnit`s — existing units
+// from an earlier purchase are never read or modified. `Product.purchasePrice`/
+// `sellingPrice` become the "current/reference" price shown in the catalog and
+// used as the default for the NEXT sale of stock with no more specific price of
+// its own (see server/src/utils/purchaseBatch.js for how a sale actually
+// resolves which historical price applies).
 export const createProductsWithSupplier = asyncHandler(async (req, res) => {
-  const { supplierName = '', supplierPhone = '', reference = '', note = '', paid = 0, source = 'cash', items = [] } = req.body;
-  if (!String(supplierName).trim()) throw new ApiError(400, 'Supplier / dealer name is required');
+  const {
+    supplierName = '', supplierPhone = '', reference = '', note = '',
+    paid = 0, source = 'cash', payments: reqPayments = null, items = [],
+  } = req.body;
   if (!items.length) throw new ApiError(400, 'At least one item is required');
+  const trimmedSupplierName = String(supplierName).trim();
+  if (!trimmedSupplierName && !items.every((it) => it.existingProductId)) {
+    throw new ApiError(400, 'Supplier / dealer name is required');
+  }
 
-  // find-or-create the supplier (case-insensitive name match within this business)
-  let supplier = await Supplier.findOne(tenantFilter(req, { name: { $regex: `^${escapeRegex(String(supplierName).trim())}$`, $options: 'i' } }));
-  if (!supplier) {
-    supplier = await Supplier.create({ business: req.businessId, name: String(supplierName).trim(), phone: String(supplierPhone || '').trim() });
-  } else if (String(supplierPhone || '').trim() && !supplier.phone) {
-    supplier.phone = String(supplierPhone).trim();
-    await supplier.save();
+  let supplier;
+  if (trimmedSupplierName) {
+    // find-or-create the supplier (case-insensitive name match within this business)
+    supplier = await Supplier.findOne(tenantFilter(req, { name: { $regex: `^${escapeRegex(trimmedSupplierName)}$`, $options: 'i' } }));
+    if (!supplier) {
+      supplier = await Supplier.create({ business: req.businessId, name: trimmedSupplierName, phone: String(supplierPhone || '').trim() });
+    } else if (String(supplierPhone || '').trim() && !supplier.phone) {
+      supplier.phone = String(supplierPhone).trim();
+      await supplier.save();
+    }
+  } else {
+    // No supplier name sent — every item is a restock (checked above), so this
+    // request is the per-product "Update Price" action, which deliberately
+    // never asks for the supplier again since the product already has one from
+    // when it was first added. Reuse that existing supplier rather than
+    // creating a new one; only fall back to a generic supplier if this
+    // particular product genuinely has none set yet.
+    const first = await Product.findOne(branchFilter(req, { _id: String(items[0].existingProductId).trim() }));
+    if (!first) throw new ApiError(404, `Product to restock not found: ${items[0].existingProductId}`);
+    if (first.supplier) {
+      supplier = await Supplier.findOne(tenantFilter(req, { _id: first.supplier }));
+    }
+    if (!supplier) {
+      supplier = await Supplier.findOne(tenantFilter(req, { name: { $regex: '^Unknown Supplier$', $options: 'i' } }));
+      if (!supplier) supplier = await Supplier.create({ business: req.businessId, name: 'Unknown Supplier' });
+    }
   }
 
   // de-dupe IMEI/serial across the whole submitted batch before touching the DB.
@@ -114,7 +164,7 @@ export const createProductsWithSupplier = asyncHandler(async (req, res) => {
   // in two branches at once, so uniqueness holds across the whole shop.
   const allCodes = [];
   for (const raw of items) {
-    if (!raw.trackSerial) continue;
+    if (!raw.trackSerial && !raw.existingProductId) continue;
     for (const u of (raw.imeis || [])) {
       const code = (u.imei1 || u.serial || '').trim();
       if (code) allCodes.push(code);
@@ -129,59 +179,134 @@ export const createProductsWithSupplier = asyncHandler(async (req, res) => {
 
   const createdProducts = [];
   const purchaseItems = [];
+  const batchIds = [];
   let total = 0;
 
   for (const raw of items) {
-    const name = String(raw.name || '').trim();
-    if (!name) throw new ApiError(400, 'Every item needs a name');
-    const isMedicine = /medicine|medicin|drug|pharma/i.test(raw.category || '');
-    if (isMedicine && !raw.expiryDate) throw new ApiError(400, `Expiry date is required for medicine: ${name}`);
+    const restockId = String(raw.existingProductId || '').trim();
+    const purchasePriceNow = Number(raw.purchasePrice) || 0;
+    const sellingPriceNow = Number(raw.sellingPrice) || 0;
+    let product;
+    let qty;
 
-    let barcode = String(raw.barcode || '').trim();
-    if (barcode) {
-      const clash = await Product.findOne(branchFilter(req, { barcode }));
-      if (clash) throw new ApiError(409, `Barcode already in use: ${barcode}`);
-    } else {
-      barcode = await uniqueBarcode(req);
-    }
+    if (restockId) {
+      // ---- Restock an EXISTING product — only when the caller explicitly
+      // picked one. Deliberately NO auto-detection by name/barcode: a live
+      // day-to-day restock has no review step, so silently merging two
+      // different phones that happen to share a display name would be a real
+      // risk a preview-then-accept flow (like Smart Import) doesn't have. ----
+      product = await Product.findOne(branchFilter(req, { _id: restockId }));
+      if (!product) throw new ApiError(404, `Product to restock not found: ${restockId}`);
 
-    const trackSerial = !!raw.trackSerial;
-    const imeis = trackSerial ? (raw.imeis || []).filter((u) => (u.imei1 || u.serial || '').trim()) : [];
-    if (trackSerial && imeis.length === 0) throw new ApiError(400, `Add at least one IMEI/serial for ${name}`);
-    const qty = trackSerial ? imeis.length : Math.max(0, Number(raw.stock || 0));
+      const trackSerial = product.trackSerial;
+      const imeis = trackSerial ? (raw.imeis || []).filter((u) => (u.imei1 || u.serial || '').trim()) : [];
+      if (trackSerial && imeis.length === 0) throw new ApiError(400, `Add at least one IMEI/serial for ${product.name}`);
+      qty = trackSerial ? imeis.length : Math.max(0, Number(raw.stock || 0));
 
-    const product = await Product.create({
-      ...raw,
-      name, barcode,
-      business: req.businessId,
-      branch: req.branchId,
-      trackSerial,
-      supplier: supplier._id,
-      stock: trackSerial ? 0 : qty, // synced from units below when trackSerial
-      warrantyBrandMonths: Number(raw.warrantyBrandMonths) || 0,
-      warrantyShopMonths: Number(raw.warrantyShopMonths) || 0,
-      purchasePrice: Number(raw.purchasePrice) || 0,
-      sellingPrice: Number(raw.sellingPrice) || 0,
-      discountPercent: Number(raw.discountPercent) || 0,
-      lowStockAlert: Number(raw.lowStockAlert) || 5,
-    });
-    createdProducts.push(product);
+      // "Current/reference" price + supplier move to this event's values —
+      // every other field (name/category/barcode/brand/color/storage/
+      // warranty/etc.) is left completely untouched, and no EXISTING
+      // PhoneUnit document is read or written, only new ones inserted.
+      product.purchasePrice = purchasePriceNow;
+      product.sellingPrice = sellingPriceNow;
+      product.supplier = supplier._id;
 
-    if (trackSerial && imeis.length) {
-      await PhoneUnit.insertMany(imeis.map((u) => ({
-        business: req.businessId, branch: req.branchId, product: product._id, status: 'in_stock',
-        imei1: (u.imei1 || '').trim(), imei2: (u.imei2 || '').trim(), serial: (u.serial || '').trim(),
-      })));
-      product.stock = imeis.length;
+      const batch = await PurchaseBatch.create({
+        business: req.businessId, branch: req.branchId, product: product._id, supplier: supplier._id,
+        purchasePrice: purchasePriceNow, sellingPrice: sellingPriceNow,
+        qtyPurchased: qty, qtyRemaining: qty, createdBy: req.user._id,
+      });
+      batchIds.push(batch._id);
+
+      if (trackSerial && imeis.length) {
+        await PhoneUnit.insertMany(imeis.map((u) => ({
+          business: req.businessId, branch: req.branchId, product: product._id, status: 'in_stock',
+          imei1: (u.imei1 || '').trim(), imei2: (u.imei2 || '').trim(), serial: (u.serial || '').trim(),
+          purchasePrice: purchasePriceNow, sellingPrice: sellingPriceNow, batch: batch._id,
+        })));
+        // Full recount, NOT `imeis.length` — this product already has other
+        // in-stock units from an earlier purchase; overwriting stock to just
+        // this new batch's count would silently wipe them off the books.
+        product.stock = await PhoneUnit.countDocuments(branchFilter(req, { product: product._id, status: 'in_stock' }));
+      } else if (!trackSerial) {
+        product.stock = (product.stock || 0) + qty;
+      }
       await product.save();
+      createdProducts.push(product);
+    } else {
+      // ---- Brand-new product — unchanged creation behavior, plus its own
+      // first PurchaseBatch row so batch history exists uniformly from day one.
+      const name = String(raw.name || '').trim();
+      if (!name) throw new ApiError(400, 'Every item needs a name');
+      const isMedicine = /medicine|medicin|drug|pharma/i.test(raw.category || '');
+      if (isMedicine && !raw.expiryDate) throw new ApiError(400, `Expiry date is required for medicine: ${name}`);
+
+      let barcode = String(raw.barcode || '').trim();
+      if (barcode) {
+        const clash = await Product.findOne(branchFilter(req, { barcode }));
+        if (clash) throw new ApiError(409, `Barcode already in use: ${barcode}`);
+      } else {
+        barcode = await uniqueBarcode(req);
+      }
+
+      const trackSerial = !!raw.trackSerial;
+      const imeis = trackSerial ? (raw.imeis || []).filter((u) => (u.imei1 || u.serial || '').trim()) : [];
+      if (trackSerial && imeis.length === 0) throw new ApiError(400, `Add at least one IMEI/serial for ${name}`);
+      qty = trackSerial ? imeis.length : Math.max(0, Number(raw.stock || 0));
+
+      product = await Product.create({
+        ...raw,
+        name, barcode,
+        business: req.businessId,
+        branch: req.branchId,
+        trackSerial,
+        supplier: supplier._id,
+        stock: trackSerial ? 0 : qty, // synced from units below when trackSerial
+        warrantyBrandMonths: Number(raw.warrantyBrandMonths) || 0,
+        warrantyShopMonths: Number(raw.warrantyShopMonths) || 0,
+        purchasePrice: purchasePriceNow,
+        sellingPrice: sellingPriceNow,
+        discountPercent: Number(raw.discountPercent) || 0,
+        lowStockAlert: Number(raw.lowStockAlert) || 5,
+      });
+      createdProducts.push(product);
+
+      const batch = await PurchaseBatch.create({
+        business: req.businessId, branch: req.branchId, product: product._id, supplier: supplier._id,
+        purchasePrice: purchasePriceNow, sellingPrice: sellingPriceNow,
+        qtyPurchased: qty, qtyRemaining: qty, createdBy: req.user._id,
+      });
+      batchIds.push(batch._id);
+
+      if (trackSerial && imeis.length) {
+        await PhoneUnit.insertMany(imeis.map((u) => ({
+          business: req.businessId, branch: req.branchId, product: product._id, status: 'in_stock',
+          imei1: (u.imei1 || '').trim(), imei2: (u.imei2 || '').trim(), serial: (u.serial || '').trim(),
+          purchasePrice: purchasePriceNow, sellingPrice: sellingPriceNow, batch: batch._id,
+        })));
+        product.stock = imeis.length; // brand-new product — nothing pre-existing to preserve
+        await product.save();
+      }
     }
 
-    const unitCost = Number(raw.purchasePrice) || 0;
-    total += unitCost * qty;
-    purchaseItems.push({ product: product._id, name: product.name, qty, unitCost });
+    total += purchasePriceNow * qty;
+    purchaseItems.push({ product: product._id, name: product.name, qty, unitCost: purchasePriceNow });
   }
 
-  const paidAmt = Math.max(0, Math.min(Number(paid || 0), total));
+  // Split-tender if the client sent >1 payment line; else a single tender from
+  // the legacy source+paid pair — same dual-path pattern as Sale.payments[].
+  const cleanPayments = (await Promise.all(
+    (Array.isArray(reqPayments) ? reqPayments : []).map(async (p) => ({
+      method: TENDERS.includes(p.method) ? p.method : 'cash',
+      amount: Number(p.amount) || 0,
+      account: await resolveAccountId(req, p.account),
+    }))
+  )).filter((p) => p.amount > 0);
+  const paidFromPayments = cleanPayments.reduce((s, p) => s + p.amount, 0);
+  const paidAmt = Math.max(0, Math.min(cleanPayments.length ? paidFromPayments : Number(paid || 0), total));
+  const primarySource = cleanPayments[0]?.method || (TENDERS.includes(source) ? source : 'cash');
+  const finalPayments = cleanPayments.length ? cleanPayments : (paidAmt > 0 ? [{ method: primarySource, amount: paidAmt, account: null }] : []);
+
   const purchase = await Purchase.create({
     business: req.businessId,
     branch: req.branchId,
@@ -192,15 +317,34 @@ export const createProductsWithSupplier = asyncHandler(async (req, res) => {
     total,
     paid: paidAmt,
     due: Math.max(0, total - paidAmt),
-    source: TENDERS.includes(source) ? source : 'cash',
+    source: primarySource,
+    payments: finalPayments,
     createdBy: req.user._id,
   });
   supplier.totalPurchase += total;
   supplier.totalPaid += paidAmt;
   await supplier.save();
 
+  // Now that the Purchase doc exists, link every batch created above to it.
+  if (batchIds.length) await PurchaseBatch.updateMany({ _id: { $in: batchIds } }, { purchase: purchase._id });
+
   await logActivity(req, { action: 'CREATE_PRODUCTS_WITH_SUPPLIER', entity: 'Supplier', entityId: supplier._id, meta: { products: createdProducts.length, total } });
   created(res, { products: createdProducts, supplier, purchase });
+});
+
+// @route GET /api/products/:id/purchase-batches — "Item Purchase Rate
+// Information": every purchase event for this product, newest first, plus the
+// most recent rate as a quick headline figure.
+export const getProductPurchaseBatches = asyncHandler(async (req, res) => {
+  const product = await Product.findOne(branchFilter(req, { _id: req.params.id }));
+  if (!product) throw new ApiError(404, 'Product not found');
+
+  const batches = await PurchaseBatch.find(branchFilter(req, { product: product._id }))
+    .sort('-purchaseDate -createdAt')
+    .populate('supplier', 'name');
+  const show = canViewBuyPrice(req);
+  const out = show ? batches : batches.map((b) => ({ ...b.toObject(), purchasePrice: null }));
+  ok(res, { batches: out, lastPurchaseRate: out[0] || null });
 });
 
 // @route PUT /api/products/:id

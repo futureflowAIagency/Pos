@@ -99,7 +99,7 @@ export default function Settings() {
         footerWebsite: business.footerWebsite || '',
         logoUrl: business.logoUrl || '',
         settings: {
-          lowStockThreshold: business.settings?.lowStockThreshold ?? 5,
+          lowStockThreshold: business.settings?.lowStockThreshold ?? 1,
           printMode: business.settings?.printMode || 'a4',
           returnWindowDays: business.settings?.returnWindowDays ?? 7,
           printWidthMm: business.settings?.printWidthMm ?? 80,

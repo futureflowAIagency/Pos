@@ -23,7 +23,7 @@ const productSchema = new mongoose.Schema(
     // discount as a percentage (%) of selling price
     discountPercent: { type: Number, default: 0, min: 0, max: 100 },
     stock: { type: Number, default: 0 },
-    lowStockAlert: { type: Number, default: 5 },
+    lowStockAlert: { type: Number, default: 1 },
     // pharmacy-specific (optional)
     expiryDate: { type: Date },
     batchNo: { type: String },

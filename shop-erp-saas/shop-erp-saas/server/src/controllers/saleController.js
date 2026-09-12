@@ -6,6 +6,7 @@ import { tenantFilter, branchFilter } from '../middleware/tenant.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import { expiredError } from '../utils/expiry.js';
 import { resolveAccountId } from '../utils/paymentAccounts.js';
+import { resolveLineCost } from '../utils/purchaseBatch.js';
 import Sale from '../models/Sale.js';
 import Product from '../models/Product.js';
 import Customer from '../models/Customer.js';
@@ -69,27 +70,37 @@ export const createSale = asyncHandler(async (req, res) => {
         const expired = expiredError(product);
         if (expired) throw new ApiError(400, expired);
 
-        // apply the product's percentage discount to get the effective selling price
+        // serial-tracked (mobile) line — exactly one specific device by IMEI —
+        // must be resolved BEFORE pricing, since its own stored price (if any)
+        // takes priority over anything derived from the product/batches.
+        let unit = null;
+        if (it.unit) {
+          unit = await PhoneUnit.findOne(branchFilter(req, { _id: it.unit })).session(session);
+          if (!unit) throw new ApiError(404, 'Selected device unit not found');
+          if (unit.status === 'sold') throw new ApiError(400, `Device ${unit.imei1 || unit.serial} is already sold`);
+          if (String(unit.product) !== String(product._id)) throw new ApiError(400, 'Unit does not match product');
+        }
+
+        // Historical cost/price: prefer this exact unit's own stored price,
+        // else FIFO-consume a purchase batch for a plain-qty line, else the
+        // product's current flat price — see utils/purchaseBatch.js. This is
+        // what lets stock bought at an earlier price keep selling at that
+        // price even after the product is restocked at a new one.
+        const { purchasePrice: unitCost, sellingPriceBase } = await resolveLineCost(req, session, product, { unit, qty: it.qty });
         const pct = Math.min(Math.max(product.discountPercent || 0, 0), 100);
-        const unitPrice = Math.round((product.sellingPrice * (1 - pct / 100)) * 100) / 100;
+        const unitPrice = Math.round((sellingPriceBase * (1 - pct / 100)) * 100) / 100;
 
         const line = {
           product: product._id,
           name: product.name,
           qty: it.qty,
-          purchasePrice: product.purchasePrice,
-          mrp: product.sellingPrice,
+          purchasePrice: unitCost,
+          mrp: sellingPriceBase,
           discountPercent: pct,
           sellingPrice: unitPrice,
         };
 
-        if (it.unit) {
-          // serial-tracked (mobile) line — exactly one specific device by IMEI
-          const unit = await PhoneUnit.findOne(branchFilter(req, { _id: it.unit })).session(session);
-          if (!unit) throw new ApiError(404, 'Selected device unit not found');
-          if (unit.status === 'sold') throw new ApiError(400, `Device ${unit.imei1 || unit.serial} is already sold`);
-          if (String(unit.product) !== String(product._id)) throw new ApiError(400, 'Unit does not match product');
-
+        if (unit) {
           line.qty = 1;
           const MONTH = 30 * 24 * 60 * 60 * 1000;
           const now = Date.now();
@@ -111,7 +122,7 @@ export const createSale = asyncHandler(async (req, res) => {
           line.warrantyShopExpiry = shopExpiry;
 
           subTotal += unitPrice;
-          profit += unitPrice - product.purchasePrice;
+          profit += unitPrice - unitCost;
           product.stock = Math.max(0, product.stock - 1);
           await product.save({ session });
           soldUnits.push({ unit, warrantyMonths: wMonths, warrantyExpiry: wExpiry, brandMonths, shopMonths, brandExpiry, shopExpiry, sellingPrice: unitPrice });
@@ -119,7 +130,7 @@ export const createSale = asyncHandler(async (req, res) => {
           // standard quantity-based line
           if (product.stock < it.qty) throw new ApiError(400, `Insufficient stock for ${product.name}`);
           subTotal += unitPrice * it.qty;
-          profit += (unitPrice - product.purchasePrice) * it.qty;
+          profit += (unitPrice - unitCost) * it.qty;
           product.stock -= it.qty;
           await product.save({ session });
         }

@@ -35,7 +35,12 @@ export default function StockReportByBrand({ business, category, groups, today, 
               {g.items.map((it, i) => (
                 <tr key={it._id} className="border-b border-gray-200">
                   <td className="py-1">{i + 1}</td>
-                  <td className="py-1">{it.name}</td>
+                  <td className="py-1">
+                    {it.name}
+                    {[it.storage, it.color].filter(Boolean).join(' • ') && (
+                      <div className="text-xs text-gray-500">{[it.storage, it.color].filter(Boolean).join(' • ')}</div>
+                    )}
+                  </td>
                   <td className="py-1">{it.category}</td>
                   <td className="text-right py-1">{it.stock} {it.unit}</td>
                 </tr>

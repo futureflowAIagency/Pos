@@ -5,16 +5,12 @@ import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import StatCard from '../components/ui/StatCard.jsx';
+import PaymentRows from '../components/ui/PaymentRows.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import PurchaseReceipt from '../components/print/PurchaseReceipt.jsx';
 import { taka, fmtDateTime } from '../utils/format.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useConfirm } from '../context/ConfirmContext.jsx';
-
-const TENDER_OPTIONS = [
-  { value: 'cash', label: 'Cash' }, { value: 'bank', label: 'Bank' }, { value: 'bkash', label: 'bKash' },
-  { value: 'nagad', label: 'Nagad' }, { value: 'rocket', label: 'Rocket' }, { value: 'card', label: 'Card' },
-];
 
 const empty = { name: '', phone: '', address: '', note: '' };
 const due = (s) => Math.max(0, (s.totalPurchase || 0) - (s.totalPaid || 0));
@@ -175,8 +171,8 @@ function PurchaseModal({ supplier, onClose, onDone, onPrint }) {
   const [items, setItems] = useState([{ name: '', qty: 1, unitCost: 0 }]);
   const [reference, setReference] = useState('');
   const [note, setNote] = useState('');
-  const [paid, setPaid] = useState(0);
-  const [source, setSource] = useState('cash');
+  const [payments, setPayments] = useState([{ method: 'cash', amount: '', account: null }]);
+  const [paidTouched, setPaidTouched] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const total = items.reduce((s, it) => s + Number(it.unitCost || 0) * Number(it.qty || 0), 0);
@@ -184,12 +180,22 @@ function PurchaseModal({ supplier, onClose, onDone, onPrint }) {
   const addRow = () => setItems([...items, { name: '', qty: 1, unitCost: 0 }]);
   const removeRow = (i) => setItems(items.filter((_, idx) => idx !== i));
 
+  // Paid Now auto-sums to the total until the owner actually types into a
+  // payment row themselves.
+  useEffect(() => {
+    if (paidTouched) return;
+    setPayments((p) => (p.length === 1 ? [{ ...p[0], amount: total || '' }] : p));
+  }, [total, paidTouched]);
+
+  const paidSum = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+
   const submit = async () => {
     const clean = items.filter((it) => it.name.trim() && Number(it.qty) > 0 && Number(it.unitCost) >= 0);
     if (!clean.length) return toast.error('Add at least one item');
     setSaving(true);
     try {
-      const { data } = await api.post(`/suppliers/${supplier._id}/purchase`, { items: clean, reference, note, paid: Number(paid || 0), source });
+      const cleanPayments = payments.filter((p) => Number(p.amount) > 0).map((p) => ({ method: p.method, amount: +p.amount || 0, account: p.account }));
+      const { data } = await api.post(`/suppliers/${supplier._id}/purchase`, { items: clean, reference, note, payments: cleanPayments });
       toast.success('Purchase recorded'); onDone(); onClose();
       onPrint?.({ purchase: data.data.purchase, supplier: data.data.supplier || supplier });
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
@@ -216,17 +222,15 @@ function PurchaseModal({ supplier, onClose, onDone, onPrint }) {
       </div>
       <button className="btn-ghost mt-2" onClick={addRow}><Plus size={15} /> Add Item</button>
 
-      <div className="border-t border-slate-200 dark:border-slate-700 mt-3 pt-3 grid grid-cols-2 gap-3">
-        <div className="flex items-center justify-between col-span-2 font-semibold"><span>Total</span><span>{taka(total)}</span></div>
-        <div><label className="label">Paid now</label><input className="input" type="number" value={paid} onChange={(e) => setPaid(e.target.value)} placeholder="0" /></div>
-        <div><label className="label">Paid From</label>
-          <select className="input" value={source} onChange={(e) => setSource(e.target.value)}>
-            {TENDER_OPTIONS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
+      <div className="border-t border-slate-200 dark:border-slate-700 mt-3 pt-3 space-y-3">
+        <div className="flex items-center justify-between font-semibold"><span>Total</span><span>{taka(total)}</span></div>
+        <div>
+          <label className="label">Paid Now (split across methods if needed)</label>
+          <PaymentRows rows={payments} total={total} onChange={(rows) => { setPaidTouched(true); setPayments(rows); }} />
         </div>
-        <div className="col-span-2 flex flex-col justify-end">
+        <div className="flex items-center justify-between">
           <span className="label">Due added</span>
-          <div className="input bg-slate-50 dark:bg-slate-800 flex items-center font-semibold text-red-500">{taka(Math.max(0, total - Number(paid || 0)))}</div>
+          <span className="font-semibold text-red-500">{taka(Math.max(0, total - paidSum))}</span>
         </div>
       </div>
     </Modal>
@@ -235,17 +239,17 @@ function PurchaseModal({ supplier, onClose, onDone, onPrint }) {
 
 function PayModal({ supplier, onClose, onDone }) {
   const confirm = useConfirm();
-  const [amount, setAmount] = useState('');
+  const [payments, setPayments] = useState([{ method: 'cash', amount: '', account: null }]);
   const [note, setNote] = useState('');
-  const [source, setSource] = useState('cash');
   const [saving, setSaving] = useState(false);
   const due = Math.max(0, (supplier.totalPurchase || 0) - (supplier.totalPaid || 0));
+  const total = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
   const submit = async () => {
-    if (!amount || Number(amount) <= 0 || Number.isNaN(Number(amount))) return toast.error('Enter a valid amount');
+    if (!total || total <= 0) return toast.error('Enter a valid amount');
     const ok = await confirm({
       title: 'Record payment?',
-      message: `Are you sure you want to record this payment of ${taka(Number(amount))}?`,
+      message: `Are you sure you want to record this payment of ${taka(total)}?`,
       confirmText: 'Confirm',
       cancelText: 'Cancel',
       tone: 'success',
@@ -253,7 +257,8 @@ function PayModal({ supplier, onClose, onDone }) {
     if (!ok) return;
     setSaving(true);
     try {
-      await api.post(`/suppliers/${supplier._id}/pay`, { amount: Number(amount), note, source });
+      const cleanPayments = payments.filter((p) => Number(p.amount) > 0).map((p) => ({ method: p.method, amount: +p.amount || 0, account: p.account }));
+      await api.post(`/suppliers/${supplier._id}/pay`, { payments: cleanPayments, note });
       toast.success('Payment recorded'); onDone(); onClose();
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
     setSaving(false);
@@ -264,13 +269,9 @@ function PayModal({ supplier, onClose, onDone }) {
       footer={<><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={saving} onClick={submit}>Record Payment</button></>}>
       <p className="text-sm mb-3">Current due: <strong className="text-red-500">{taka(due)}</strong></p>
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="label">Amount</label><input className="input" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
-          <div><label className="label">Pay From</label>
-            <select className="input" value={source} onChange={(e) => setSource(e.target.value)}>
-              {TENDER_OPTIONS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
-          </div>
+        <div>
+          <label className="label">Amount (split across methods if needed)</label>
+          <PaymentRows rows={payments} total={due} onChange={setPayments} />
         </div>
         <div><label className="label">Note</label><input className="input" value={note} onChange={(e) => setNote(e.target.value)} /></div>
       </div>

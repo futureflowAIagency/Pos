@@ -38,7 +38,7 @@ export async function computeBalances(businessId, branchId = null) {
   const [
     splitSalesIn, legacySalesIn, dueIn, splitServiceIn, legacyServiceIn, emiDownIn, emiScheduleIn,
     fundsAddIn, fundsWithdrawOut, transfersIn, transfersOut,
-    expOut, supplierOut, refundOut, moneyBackOut,
+    expOut, splitSupplierOut, legacySupplierOut, refundOut, moneyBackOut,
   ] = await Promise.all([
     // Multi-tender sales: unwind the payments[] breakdown
     Sale.aggregate([
@@ -101,9 +101,16 @@ export async function computeBalances(businessId, branchId = null) {
       { $match: { business: bId, ...branchMatch } },
       { $group: { _id: { $ifNull: ['$source', 'cash'] }, amount: { $sum: '$amount' } } },
     ]),
-    // supplier purchases (paid-now portion) + standalone due payments — both are money OUT
+    // supplier purchases (paid-now portion) — money OUT. Multi-tender purchases:
+    // unwind the payments[] breakdown, same pattern as Sale.payments[].
     Purchase.aggregate([
-      { $match: { business: bId, ...branchMatch } },
+      { $match: { business: bId, ...branchMatch, 'payments.0': { $exists: true } } },
+      { $unwind: '$payments' },
+      { $group: { _id: '$payments.method', amount: { $sum: '$payments.amount' } } },
+    ]),
+    // Legacy single-tender purchases (no payments[] recorded) — fall back to paid+source
+    Purchase.aggregate([
+      { $match: { business: bId, ...branchMatch, $or: [{ payments: { $exists: false } }, { payments: { $size: 0 } }] } },
       { $group: { _id: { $ifNull: ['$source', 'cash'] }, amount: { $sum: '$paid' } } },
     ]),
     // return/exchange cash refunds — money OUT (store credit is intentionally excluded)
@@ -134,7 +141,8 @@ export async function computeBalances(businessId, branchId = null) {
   for (const r of fundsWithdrawOut) if (r._id in outflow) outflow[r._id] += r.amount || 0;
   for (const r of transfersOut) if (r._id in outflow) outflow[r._id] += r.amount || 0;
   for (const r of expOut) if (r._id in outflow) outflow[r._id] += r.amount || 0;
-  for (const r of supplierOut) if (r._id in outflow) outflow[r._id] += r.amount || 0;
+  for (const r of splitSupplierOut) if (r._id in outflow) outflow[r._id] += r.amount || 0;
+  for (const r of legacySupplierOut) if (r._id in outflow) outflow[r._id] += r.amount || 0;
   for (const r of refundOut) if (r._id in outflow) outflow[r._id] += r.amount || 0;
   for (const r of moneyBackOut) if (r._id in outflow) outflow[r._id] += r.amount || 0;
 
@@ -153,15 +161,15 @@ export async function computeBalances(businessId, branchId = null) {
 //
 // Deliberately covers the same money-movement set the client asked about:
 // Sale.payments[] (POS), Sale.moneyBacks[], Fund (add/withdraw), Transfer
-// (both sides), Expense, and DuePayment (Collect Due). Supplier purchases,
-// EMI/Installment payments and Service jobs do NOT carry an `account` field
-// yet — a deliberate scope decision, not an oversight; add it there the same
-// way if the client wants full coverage later.
+// (both sides), Expense, DuePayment (Collect Due), and Purchase.payments[]
+// (supplier purchases, an outflow). EMI/Installment payments and Service jobs
+// still do NOT carry an `account` field — a deliberate scope decision, not an
+// oversight; add it there the same way if the client wants full coverage later.
 export async function computeAccountBalances(businessId, branchId = null) {
   const bId = new mongoose.Types.ObjectId(businessId);
   const branchMatch = branchId ? { branch: new mongoose.Types.ObjectId(branchId) } : {};
 
-  const [salesIn, fundIn, fundOut, transferIn, transferOut, dueIn, expOut, moneyBackOut] = await Promise.all([
+  const [salesIn, fundIn, fundOut, transferIn, transferOut, dueIn, expOut, moneyBackOut, purchaseOut] = await Promise.all([
     Sale.aggregate([
       { $match: { business: bId, ...branchMatch, 'payments.0': { $exists: true } } },
       { $unwind: '$payments' },
@@ -198,6 +206,12 @@ export async function computeAccountBalances(businessId, branchId = null) {
       { $match: { 'moneyBacks.account': { $ne: null } } },
       { $group: { _id: '$moneyBacks.account', amount: { $sum: '$moneyBacks.amount' } } },
     ]),
+    Purchase.aggregate([
+      { $match: { business: bId, ...branchMatch, 'payments.0': { $exists: true } } },
+      { $unwind: '$payments' },
+      { $match: { 'payments.account': { $ne: null } } },
+      { $group: { _id: '$payments.account', amount: { $sum: '$payments.amount' } } },
+    ]),
   ]);
 
   const net = {};
@@ -210,5 +224,6 @@ export async function computeAccountBalances(businessId, branchId = null) {
   apply(dueIn, 1);
   apply(expOut, -1);
   apply(moneyBackOut, -1);
+  apply(purchaseOut, -1);
   return net; // { [accountId]: balance }
 }

@@ -11,6 +11,16 @@ const phoneUnitSchema = new mongoose.Schema(
     // once) even though the document itself is branch-scoped — see phoneUnitController.
     branch: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
     product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true, index: true },
+    // This unit's OWN cost/price, snapshotted from whichever purchase batch
+    // brought it in — null on every unit that predates this feature (or was
+    // added without a supplier/price, e.g. plain "Manage IMEIs"), which falls
+    // back to the product's current flat purchasePrice/sellingPrice, so old
+    // data behaves exactly as before. Deliberately `!= null` checked wherever
+    // read, never `||` — a legitimate ৳0 cost unit must not be mistaken for
+    // "unset" and silently redirected to the product's current price.
+    purchasePrice: { type: Number, default: null },
+    sellingPrice: { type: Number, default: null },
+    batch: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseBatch', default: null },
     imei1: { type: String, trim: true, default: '' },
     imei2: { type: String, trim: true, default: '' },
     serial: { type: String, trim: true, default: '' },

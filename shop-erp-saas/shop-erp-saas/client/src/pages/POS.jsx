@@ -12,6 +12,16 @@ import ThermalReceipt from '../components/print/ThermalReceipt.jsx';
 
 // effective unit price after the product's percentage discount
 const unitPrice = (p) => Math.round((p.sellingPrice * (1 - (p.discountPercent || 0) / 100)) * 100) / 100;
+// A serial-tracked unit's OWN selling price (set once when it was brought in
+// at a specific batch's price) takes priority over the product's current flat
+// price — same preference order the server's resolveLineCost() uses at
+// checkout. Falls back to the product's price for a unit that predates this
+// feature (or was added with no price info), so nothing here can ever show a
+// different total than what the server will actually charge.
+const unitDisplayPrice = (u) => ({
+  sellingPrice: u.sellingPrice != null ? u.sellingPrice : (u.product?.sellingPrice || 0),
+  discountPercent: u.product?.discountPercent || 0,
+});
 // keep a typed quantity within [0, stock]; supports decimals (e.g. kg)
 const clampQty = (q, stock) => {
   let n = Number(q);
@@ -79,6 +89,12 @@ export default function POS() {
   // Split/multi-tender payment: one or more { method, amount } rows (req: pay
   // part bKash, part card, part cash, etc. in a single sale).
   const [payments, setPayments] = useState([{ method: 'cash', amount: '' }]);
+  // Paid defaults to the full Total (Due defaults to 0) and auto-tracks the
+  // total as items are added/removed — but stops the moment the cashier
+  // actually edits an amount themselves, or splits into more than one tender,
+  // so a manual figure is never silently overwritten (same paidTouched pattern
+  // used for the Add-Product-with-Supplier "Paid Now" field).
+  const [paidTouched, setPaidTouched] = useState(false);
   const [lastSale, setLastSale] = useState(null);
   const [showPrint, setShowPrint] = useState(false);
   // hold-cart state
@@ -217,8 +233,15 @@ export default function POS() {
     if (expired) { toast.error(expired); return; }
     setCart((c) => {
       if (c.some((i) => i.unitId === unit._id)) { toast.error('Device already in cart'); return c; }
+      // This unit's own preserved price (if it was brought in through a priced
+      // batch) — never the product's current flat price, so an older/cheaper
+      // unit can't be silently re-priced by a later restock. See
+      // unitDisplayPrice()/resolveLineCost() — client and server must always
+      // agree on what a specific unit costs, or the cashier could collect a
+      // different amount than the invoice ends up recording.
+      const { sellingPrice, discountPercent } = unitDisplayPrice(unit);
       return [...c, {
-        _id: p._id, name: p.name, sellingPrice: p.sellingPrice, discountPercent: p.discountPercent || 0,
+        _id: p._id, name: p.name, sellingPrice, discountPercent,
         qty: 1, unitId: unit._id, imei1: unit.imei1, imei2: unit.imei2, serial: unit.serial,
       }];
     });
@@ -358,7 +381,7 @@ export default function POS() {
     return { ...i, qty: q };
   }));
   const removeItem = (key) => setCart((c) => c.filter((i) => lineKey(i) !== key));
-  const resetSale = () => { setCart([]); setDiscount(0); setPayments([{ method: 'cash', amount: '' }]); setCustPhone(''); setCustName(''); setCustAddress(''); setMatchedCustomer(null); setCustomerNid(''); };
+  const resetSale = () => { setCart([]); setDiscount(0); setPayments([{ method: 'cash', amount: '' }]); setPaidTouched(false); setCustPhone(''); setCustName(''); setCustAddress(''); setMatchedCustomer(null); setCustomerNid(''); };
 
   const subTotal = cart.reduce((s, i) => s + unitPrice(i) * Number(i.qty || 0), 0);
   const total = Math.max(0, subTotal - Number(discount || 0));
@@ -366,10 +389,21 @@ export default function POS() {
   const due = Math.max(0, total - paidSum);
 
   // ---------- split-payment rows ----------
-  const setPaymentRow = (i, k, v) => setPayments((rows) => rows.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
-  const addPaymentRow = () => setPayments((rows) => [...rows, { method: 'cash', amount: '' }]);
+  const setPaymentRow = (i, k, v) => {
+    if (k === 'amount') setPaidTouched(true); // manual edit — stop auto-syncing to total
+    setPayments((rows) => rows.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
+  };
+  const addPaymentRow = () => { setPaidTouched(true); setPayments((rows) => [...rows, { method: 'cash', amount: '' }]); };
   const removePaymentRow = (i) => setPayments((rows) => rows.length > 1 ? rows.filter((_, idx) => idx !== i) : rows);
   const fillRemaining = (i) => setPaymentRow(i, 'amount', String(Math.max(0, total - (paidSum - (Number(payments[i]?.amount) || 0)))));
+
+  // Keep Paid = Total (so Due shows 0) until the cashier edits payment
+  // themselves — mirrors how the old default-full-payment behavior looked to
+  // the cashier, just now visible on screen instead of only implied at checkout.
+  useEffect(() => {
+    if (paidTouched) return;
+    setPayments((rows) => (rows.length === 1 ? [{ ...rows[0], amount: total > 0 ? String(total) : '' }] : rows));
+  }, [total, paidTouched]);
 
   // ---------- hold / resume ----------
   const holdCart = () => {
@@ -394,6 +428,7 @@ export default function POS() {
     setDiscount(h.discount || 0);
     // back-compat: older held bills stored a single paid+method instead of payments[]
     setPayments(h.payments?.length ? h.payments : [{ method: h.method || 'cash', amount: h.paid || '' }]);
+    setPaidTouched(true); // resumed bill keeps exactly what was held, not re-synced to the new total
     const next = holds.filter((x) => x.id !== h.id);
     setHolds(next); writeHolds(heldKey, next);
     setHoldsOpen(false);
@@ -552,7 +587,7 @@ export default function POS() {
               {unitResults.map((u) => (
                 <button key={u._id} onClick={() => pushUnit(u)} className="card p-3 text-left hover:ring-2 hover:ring-brand-500 transition">
                   <p className="font-medium text-sm truncate">{u.product?.name || 'Item'}</p>
-                  <p className="text-brand-600 font-bold">{taka(unitPrice({ sellingPrice: u.product?.sellingPrice || 0, discountPercent: u.product?.discountPercent || 0 }))}</p>
+                  <p className="text-brand-600 font-bold">{taka(unitPrice(unitDisplayPrice(u)))}</p>
                   <p className="text-xs text-brand-500 truncate">Code: {u.imei1 || u.serial}</p>
                 </button>
               ))}
