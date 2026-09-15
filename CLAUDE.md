@@ -1230,5 +1230,76 @@ claimed.
 
 ---
 
+### ✅ Performance, step 2: the Dashboard's own two bottlenecks (2026-09-15)
+
+Client confirmed the pagination/index work helped, but said the Dashboard specifically still
+loads slowly and asked why plus what else can be done. Read `dashboardController.js` and
+`balanceService.js` directly rather than guessing, and found two real, separate causes:
+
+1. **The Dashboard fetched the ENTIRE product catalog on every single load.**
+   `Product.find({business, branch, isActive:true})` — no `.lean()`, no field selection, no
+   limit — just to read `.length` for the product count, filter low-stock items in JS, and
+   filter slow-moving items in JS. With this shop's ~600-product catalog, that's every product's
+   full document (price, variant, supplier, warranty fields — none of it used) hydrated into a
+   real Mongoose object, every time the Dashboard opened. Same class of bug already fixed on the
+   Products page itself in step 1 — the Dashboard just never got the same fix.
+   - Replaced with three targeted queries: `Product.countDocuments()` for the total (no
+     documents fetched at all); a `.lean().select('name stock')` query with the low-stock filter
+     done IN the query (`$expr`, same technique as step 1) for the Low Stock widget; and a
+     `.lean().select('name stock createdAt')` query for the slow-moving-stock candidates (its
+     `createdAt` range filter is exactly what the `(business, branch, createdAt)` index from
+     step 1 already covers).
+   - This also fully closes a gap the September audit had only partially closed: the Dashboard's
+     low-stock widget used to ship whole Product documents (including `purchasePrice`) past the
+     'View Buy Price' permission and rely on redacting it afterward — now the query itself never
+     selects that field, so there's nothing left to redact or leak.
+
+2. **`computeBalances` re-scans the shop's ENTIRE lifetime transaction history on every call —
+   16 separate aggregations across 9 collections (Sale, DuePayment, ServiceJob, Installment,
+   Fund, Transfer, Expense, Purchase, Return), every one of them with no date filter at all.**
+   This is by design (it's a running balance, not a monthly one), but it means the cost grows
+   with the shop's whole history, not with how busy today was — and it's called fresh on every
+   Dashboard load, every Finance page load, and every Advanced Report. For an established shop
+   with months of real sales/expense/purchase history, this is very likely the single largest
+   contributor to "the dashboard is slow."
+   - The financially-correct fix (an incrementally-updated balance snapshot, updated on every
+     money-moving write — the same pattern `Product.stock` already uses instead of re-summing
+     stock movements) is real architecture surgery across every checkout/expense/purchase/refund/
+     due-collection code path in the app. Given real money is involved, that is **not** something
+     to rush through in one sitting — it needs its own careful, dedicated pass, same reasoning as
+     why the earlier offline-mode request was deliberately not folded into a quick round.
+   - As a safe, reversible interim step: added a **20-second in-memory cache** in front of
+     `computeBalances` (all 3 of its call sites — Dashboard, Finance's payment-account balances,
+     Advanced Report — share it automatically, no controller changes needed). Checked first: none
+     of these three callers ever use the balance to GATE a money-moving action (no checkout,
+     expense, or purchase anywhere reads it before deciding whether to allow something) — every
+     use is read-only display, so a few seconds of staleness is invisible in practice and
+     self-corrects the moment the cache entry expires. In-flight requests landing in the same
+     instant share one query (the promise itself is cached, not just the resolved value), so the
+     Dashboard's own `Promise.all` calling this alongside 18 other things can't trigger a second,
+     redundant full scan. The underlying computation (`computeBalancesUncached`) is completely
+     untouched — same 16 aggregations, same logic, byte-for-byte.
+- **Verified the numbers didn't change, only the speed did**: seeded a realistic-scale copy of
+  this shop (600 products, 1,500 sales, 300 expenses, 200 purchases spread over 180 days) on the
+  local replica set, captured the OLD code's `/dashboard/summary` response as JSON, restored the
+  NEW code, captured it again, and diffed — **every field matched byte-for-byte** (revenue,
+  profit, expense, due, all 6 balances, low-stock count, everything) except the one live
+  timestamp field. Measured real HTTP round-trips at that same scale: **62-121ms → 20-37ms**
+  (roughly 3x on localhost, where network latency to the database is near-zero — the gap should
+  be larger on the live site, where every one of the old code's now-eliminated round-trips also
+  had to cross the internet to Atlas). Also verified: `node --check` + full `app.js` import-chain
+  + client build; re-ran every existing feature fixture from this session on a freshly-provisioned
+  database (not a reused one — this specifically ruled out state accumulated across repeated test
+  runs) — 35/39 in the general fixture, with all 4 "failures" traced to that fixture script's own
+  stale assumption about the Warranty Search response shape (a deliberate, already-separately-
+  verified 13/13 change from earlier the same day) rather than anything touched today; the
+  dedicated pagination/index fixture from step 1 re-ran clean at 26/26.
+- **Not done, flagged for the client explicitly**: a true persistent balance snapshot (the
+  proper long-term fix for #2) and the same `.lean()`/count-instead-of-fetch treatment for
+  `Installment.find({status:'active'})` (same pattern as the Product fix, but installments are
+  typically far fewer than products for this shop, so a smaller win, left for a future pass).
+
+---
+
 ### How to resume after context loss
 1. Read this whole file. 2. Check the Phase Plan status markers (§3) for the first non-✅ phase. 3. Re-read that phase's bullet list + §4 conventions. 4. `git log --oneline` and `git status` to see what's committed. 5. Continue; update §3 status + §5 change log when done.

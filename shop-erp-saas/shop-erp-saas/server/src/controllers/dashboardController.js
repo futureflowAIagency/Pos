@@ -15,7 +15,6 @@ import { decryptSecret } from '../utils/secretCrypto.js';
 import { generateText, hasCentralAI } from '../services/aiService.js';
 import { computeBalances } from '../services/balanceService.js';
 import { recogniseEmiProfit, findPlansInRange } from '../services/emiService.js';
-import { canViewBuyPrice, hideBuyPrice } from '../utils/buyPrice.js';
 
 // Resolve a { from, to } window from a named period or an explicit custom range.
 // period: daily | weekly | monthly | half_yearly | yearly | custom
@@ -50,8 +49,9 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
   const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
 
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  const fourteenDaysAgoDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
 
-  const [salesAgg, todayAgg, expenseAgg, products, dueAgg, employeesCount, topProducts, recentOrders, paymentAgg, recentActivities, periodSalesAgg, periodExpenseAgg, balances, periodServiceAgg, activeEmis, recentSalesByProduct, periodEmiPlans] = await Promise.all([
+  const [salesAgg, todayAgg, expenseAgg, totalProducts, lowStockDocs, slowMovingCandidates, dueAgg, employeesCount, topProducts, recentOrders, paymentAgg, recentActivities, periodSalesAgg, periodExpenseAgg, balances, periodServiceAgg, activeEmis, recentSalesByProduct, periodEmiPlans] = await Promise.all([
     Sale.aggregate([
       { $match: { business: bId, ...bMatch, createdAt: { $gte: startOfMonth } } },
       { $group: { _id: null, revenue: { $sum: '$total' }, profit: { $sum: '$profit' }, count: { $sum: 1 } } },
@@ -64,7 +64,28 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
       { $match: { business: bId, ...bMatch, date: { $gte: startOfMonth } } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]),
-    Product.find({ business: bId, ...bMatch, isActive: true }),
+    // Just the count — used to be `(await Product.find(...)).length`, which
+    // meant pulling every product's full document (price, variant, supplier —
+    // none of it needed here) just to read .length off the array.
+    Product.countDocuments({ business: bId, ...bMatch, isActive: true }),
+    // Low Stock Alert widget: filters IN the query ($expr, a field-to-field
+    // compare — same technique the Products page's own lowStock filter uses)
+    // and selects only the 3 fields the widget actually renders, instead of
+    // fetching the whole catalog and filtering/redacting it in JS.
+    Product.find({
+      business: bId, ...bMatch, isActive: true,
+      $expr: { $lte: ['$stock', '$lowStockAlert'] },
+    }).select('name stock').lean(),
+    // Slow-moving/dead-stock candidates: in-stock products older than 14 days
+    // (see the ranking below) — still potentially a large chunk of the
+    // catalog, since correctly finding the 8 least-sold items means looking at
+    // all of them, but `.lean()` + `.select()` cut what each one costs to
+    // fetch and hydrate down to the 3 fields actually used, and `createdAt`
+    // is the same field the business+branch+createdAt index already covers.
+    Product.find({
+      business: bId, ...bMatch, isActive: true,
+      stock: { $gt: 0 }, createdAt: { $lte: fourteenDaysAgoDate },
+    }).select('name stock createdAt').lean(),
     // Customer dues stay business-wide — Customer is shared across branches
     Customer.aggregate([
       { $match: { business: bId } },
@@ -131,11 +152,10 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
   const monthRevenue = salesAgg[0]?.revenue || 0;
   const monthProfit = salesAgg[0]?.profit || 0;
   const monthExpense = expenseAgg[0]?.total || 0;
-  // The low-stock widget ships whole Product documents to the browser, so it
-  // carried purchasePrice straight past the 'view-buy-price' gate — redact it
-  // here the same way getProducts does.
-  const lowStockRaw = products.filter((p) => p.stock <= p.lowStockAlert);
-  const lowStock = canViewBuyPrice(req) ? lowStockRaw : lowStockRaw.map((p) => hideBuyPrice(p.toObject()));
+  // lowStockDocs is already `.select('name stock')` — it was never carrying
+  // purchasePrice in the first place, so there's nothing left for the
+  // 'view-buy-price' gate to redact here any more.
+  const lowStock = lowStockDocs;
 
   const periodRevenue = periodSalesAgg[0]?.revenue || 0;
   const periodProfit = periodSalesAgg[0]?.profit || 0;
@@ -147,11 +167,10 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
 
   // Slow-moving / dead stock: in-stock products (added >14 days ago, so genuinely
   // new arrivals aren't unfairly flagged) ranked by the least sold in the last 90
-  // days — zero-sold, longest-sitting items rise to the top.
+  // days — zero-sold, longest-sitting items rise to the top. The age/in-stock
+  // filtering itself now happens in the query above, not here.
   const soldMap = new Map(recentSalesByProduct.map((s) => [String(s._id), s]));
-  const fourteenDaysAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
-  const slowMoving = products
-    .filter((p) => p.stock > 0 && new Date(p.createdAt).getTime() <= fourteenDaysAgo)
+  const slowMoving = slowMovingCandidates
     .map((p) => {
       const s = soldMap.get(String(p._id));
       return {
@@ -175,7 +194,7 @@ export const dashboardSummary = asyncHandler(async (req, res) => {
       monthSalesCount: salesAgg[0]?.count || 0,
       todayRevenue: todayAgg[0]?.revenue || 0,
       todaySalesCount: todayAgg[0]?.count || 0,
-      totalProducts: products.length,
+      totalProducts,
       lowStockCount: lowStock.length,
       totalDue: dueAgg[0]?.totalDue || 0, // regular sales due only — EMI due is tracked separately below (req 10)
       emiReceivable: activeEmis.reduce((s, i) => s + i.balance, 0),

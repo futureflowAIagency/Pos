@@ -31,7 +31,13 @@ const emptyMap = () => METHODS.reduce((m, k) => { m[k] = 0; return m; }, {});
 // combined view. Only Sale/DuePayment/ServiceJob/Installment/Fund/Transfer/
 // Expense/Purchase/Return carry `branch` — Customer/Supplier/Employee (not
 // queried here) stay business-wide by design.
-export async function computeBalances(businessId, branchId = null) {
+//
+// This scans EVERY money-moving document the business has ever recorded —
+// there is no date filter, by design, since it's a lifetime running balance —
+// so its cost grows with the shop's whole history, not with how busy today
+// was. `computeBalances` below is the real function; `computeBalancesUncached`
+// is what actually does the work.
+async function computeBalancesUncached(businessId, branchId = null) {
   const bId = new mongoose.Types.ObjectId(businessId);
   const branchMatch = branchId ? { branch: new mongoose.Types.ObjectId(branchId) } : {};
 
@@ -149,6 +155,33 @@ export async function computeBalances(businessId, branchId = null) {
   const balances = emptyMap();
   for (const m of METHODS) balances[m] = inflow[m] - outflow[m];
   return balances; // { cash, bank, bkash, nagad, rocket, card }
+}
+
+// Short-lived cache in front of the full lifetime scan above. Every caller
+// (Dashboard, Finance's payment-account balances, the Advanced Report) only
+// ever DISPLAYS this number — no checkout, expense, purchase or any other
+// money-moving action anywhere in this app reads it to decide whether to
+// allow something — so a few seconds of staleness is invisible in practice
+// and self-corrects the moment the cache entry expires. This does not change
+// what gets computed or how, only how often; if it's ever removed, every
+// caller keeps working exactly as before, just slower again.
+const BALANCE_CACHE_TTL_MS = 20_000;
+const balanceCache = new Map(); // "businessId:branchId" -> { at, promise }
+
+export function computeBalances(businessId, branchId = null) {
+  const key = `${businessId}:${branchId || 'all'}`;
+  const hit = balanceCache.get(key);
+  if (hit && Date.now() - hit.at < BALANCE_CACHE_TTL_MS) return hit.promise;
+  // Cache the in-flight PROMISE, not just the resolved value — several
+  // requests landing within the same instant (e.g. Dashboard's own
+  // Promise.all calling this alongside everything else) share one query
+  // instead of each kicking off their own copy of all 16 aggregations.
+  const promise = computeBalancesUncached(businessId, branchId).catch((err) => {
+    balanceCache.delete(key); // don't cache a failure
+    throw err;
+  });
+  balanceCache.set(key, { at: Date.now(), promise });
+  return promise;
 }
 
 // Per-NAMED-ACCOUNT balance (e.g. each of the shop's 5-10 real bank accounts,
