@@ -72,11 +72,17 @@ export default function ClaimWarranty() {
   const [itemPreset, setItemPreset] = useState('');
   const [itemText, setItemText] = useState('');
 
-  // Warranty Search by Number — pull a whole claim back up from the number
-  // printed on the customer's slip, without scrolling the claims list.
+  // Warranty Search by Number — pull a claim back up from the number printed on
+  // the customer's slip, OR (more realistically) from whatever the counter
+  // actually has on hand: the customer's phone, their name, or the device's
+  // IMEI/serial. Can match more than one claim (e.g. two visits on the same
+  // phone number), so this holds an array; `numberSelected` is which one is
+  // currently shown in full, or null while still on the pick-list.
   const [numberQuery, setNumberQuery] = useState('');
   const [numberBusy, setNumberBusy] = useState(false);
-  const [numberResult, setNumberResult] = useState(null); // { claim, warranty }
+  const [numberSearched, setNumberSearched] = useState(false); // a search has actually run
+  const [numberResults, setNumberResults] = useState([]); // [{ claim, warranty }]
+  const [numberSelected, setNumberSelected] = useState(null); // index into numberResults
   const [numberError, setNumberError] = useState('');
 
   const [claims, setClaims] = useState([]);
@@ -115,14 +121,21 @@ export default function ClaimWarranty() {
 
   const searchByNumber = async () => {
     if (!numberQuery.trim()) return;
-    setNumberBusy(true); setNumberError(''); setNumberResult(null);
+    setNumberBusy(true); setNumberError(''); setNumberResults([]); setNumberSelected(null); setNumberSearched(true);
     try {
       const { data } = await api.get('/warranty-claims/by-number', { params: { number: numberQuery.trim() } });
-      setNumberResult(data.data);
+      const results = data.data.results || [];
+      setNumberResults(results);
+      // Exactly one match → skip the pick-list and show it directly, matching
+      // the old single-result feel for the common case (a real claim number).
+      if (results.length === 1) setNumberSelected(0);
     } catch (e) {
       setNumberError(e.response?.data?.message || 'Error');
     }
     setNumberBusy(false);
+  };
+  const clearNumberSearch = () => {
+    setNumberQuery(''); setNumberResults([]); setNumberSelected(null); setNumberError(''); setNumberSearched(false);
   };
 
   const lookup = async () => {
@@ -197,21 +210,58 @@ export default function ClaimWarranty() {
       </div>
 
       {/* Warranty Search by Number — the customer brings back the slip they were
-          given, and the counter pulls the whole claim up from that number alone. */}
+          given, and the counter pulls the whole claim up. In practice the slip's
+          own claim number is often the one thing NOT on hand, so this also
+          matches on the customer's phone, their name, or the device's IMEI/serial. */}
       <div className="card p-4 space-y-3">
         <h3 className="font-semibold flex items-center gap-2"><Hash size={16} /> Warranty Search by Number</h3>
-        <p className="text-sm text-slate-500">Enter the Warranty (claim) number printed on the customer's receipt to pull up that claim's full details.</p>
+        <p className="text-sm text-slate-500">Enter the Warranty (claim) number, the customer's phone/name, or the device's IMEI/serial to pull up that claim's full details.</p>
         <div className="flex items-center gap-2">
           <Search size={18} className="text-slate-400 shrink-0" />
-          <input className="input font-mono" placeholder="e.g. WC-12345678-42" value={numberQuery}
+          <input className="input font-mono" placeholder="e.g. WC-12345678-42, a phone number, or an IMEI" value={numberQuery}
             onChange={(e) => setNumberQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') searchByNumber(); }} />
           <button className="btn-primary shrink-0" disabled={numberBusy} onClick={searchByNumber}>{numberBusy ? 'Searching...' : 'Search'}</button>
-          {(numberResult || numberError) && (
-            <button className="btn-ghost shrink-0" onClick={() => { setNumberResult(null); setNumberError(''); setNumberQuery(''); }}>Clear</button>
+          {(numberSearched || numberError) && (
+            <button className="btn-ghost shrink-0" onClick={clearNumberSearch}>Clear</button>
           )}
         </div>
         {numberError && <p className="text-sm text-red-500">{numberError}</p>}
-        {numberResult && <WarrantyNumberResult data={numberResult} onPrint={() => setPrintClaim(numberResult.claim)} onPrintDelivery={() => setPrintDelivery(numberResult.claim)} />}
+        {numberSearched && !numberError && numberResults.length === 0 && (
+          <p className="text-sm text-slate-500">No warranty claim found for that — try the customer's phone number, name, or the device's IMEI/serial.</p>
+        )}
+        {/* Several matches (e.g. one phone number, two different visits) → pick which one */}
+        {numberResults.length > 1 && numberSelected === null && (
+          <div className="space-y-1.5">
+            <p className="text-xs text-slate-400">{numberResults.length} matching claims — pick one:</p>
+            {numberResults.map(({ claim }, i) => (
+              <button
+                key={claim._id}
+                type="button"
+                onClick={() => setNumberSelected(i)}
+                className="w-full text-left rounded-lg border border-brand-200 dark:border-slate-700 hover:bg-brand-50 dark:hover:bg-slate-700/40 p-2.5 flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <span className="font-mono font-medium">{claim.claimNo}</span>
+                  <span className={`badge ${STATUS_BADGE[claim.status]} ml-2`}>{STATUS_LABEL[claim.status] || claim.status}</span>
+                  <p className="text-xs text-slate-400 truncate">{claim.productName} — {claim.customerName} {claim.customerPhone ? `(${claim.customerPhone})` : ''}</p>
+                </div>
+                <span className="text-xs text-slate-400 shrink-0">{fmtDateTime(claim.createdAt)}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {numberSelected !== null && numberResults[numberSelected] && (
+          <>
+            {numberResults.length > 1 && (
+              <button type="button" className="btn-ghost !py-1 text-xs" onClick={() => setNumberSelected(null)}>← Back to the {numberResults.length} matches</button>
+            )}
+            <WarrantyNumberResult
+              data={numberResults[numberSelected]}
+              onPrint={() => setPrintClaim(numberResults[numberSelected].claim)}
+              onPrintDelivery={() => setPrintDelivery(numberResults[numberSelected].claim)}
+            />
+          </>
+        )}
       </div>
 
       <div className="card p-4 space-y-3">

@@ -10,6 +10,7 @@ import Customer from '../models/Customer.js';
 import Product from '../models/Product.js';
 
 const genClaimNo = () => 'WC-' + Date.now().toString().slice(-8) + '-' + Math.floor(Math.random() * 90 + 10);
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Free-list of what the customer handed in with the device (Box / Charger /
 // Only Mobile presets, plus anything typed). Trimmed, blanks dropped, de-duped
@@ -83,37 +84,58 @@ export const lookupForClaim = asyncHandler(async (req, res) => {
 // the response names which branch the claim actually belongs to. A branch-locked
 // staff login stays inside its own branch.
 export const findClaimByNumber = asyncHandler(async (req, res) => {
-  const { number } = req.query;
-  if (!number?.trim()) throw new ApiError(400, 'Warranty number is required');
-  const q = tenantFilter(req, { claimNo: { $regex: `^${String(number).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } });
+  const term = String(req.query.number || '').trim();
+  if (!term) throw new ApiError(400, 'Enter a warranty number, customer phone/name, or IMEI/serial');
+  // Started as an EXACT claim-number-only match, but a shopkeeper realistically
+  // has the customer's phone number on hand far more often than the generated
+  // claim code printed on a slip they may have lost — so this now searches the
+  // same way Invoice Search does: a partial, case-insensitive match across every
+  // field a counter might actually be holding. Can return more than one claim
+  // (e.g. the same phone number across two different visits); the frontend
+  // shows a pick-list when that happens and the full detail straight away when
+  // there's exactly one match.
+  const rx = { $regex: escapeRegex(term), $options: 'i' };
+  const q = tenantFilter(req, {
+    $or: [
+      { claimNo: rx },
+      { customerPhone: rx },
+      { customerName: rx },
+      { imei1: rx },
+      { imei2: rx },
+      { serial: rx },
+    ],
+  });
   if (req.user?.assignedBranch) q.branch = req.user.assignedBranch;
 
-  const claim = await WarrantyClaim.findOne(q)
+  const claims = await WarrantyClaim.find(q)
+    .sort('-createdAt')
+    .limit(30)
     .populate('branch', 'name')
     .populate('product', 'name brand color storage warrantyBrandMonths warrantyShopMonths')
     .populate('unit', 'imei1 imei2 serial status soldAt warrantyMonths warrantyExpiry warrantyBrandMonths warrantyShopMonths warrantyBrandExpiry warrantyShopExpiry');
-  if (!claim) throw new ApiError(404, 'No warranty claim found with that number');
 
-  // Warranty standing of the underlying device, when this claim was raised
-  // against a device the shop actually sold (a hand-entered claim has no unit).
-  let warranty = null;
-  if (claim.unit) {
-    const u = claim.unit;
-    const active = u.status === 'sold' && u.warrantyExpiry && new Date(u.warrantyExpiry) >= new Date();
-    warranty = {
-      status: u.status !== 'sold' ? 'not_sold' : (active ? 'active' : 'expired'),
-      soldAt: u.soldAt,
-      months: u.warrantyMonths,
-      expiry: u.warrantyExpiry,
-      brandMonths: u.warrantyBrandMonths,
-      shopMonths: u.warrantyShopMonths,
-      brandExpiry: u.warrantyBrandExpiry,
-      shopExpiry: u.warrantyShopExpiry,
-    };
-  }
-  ok(res, { claim, warranty });
+  // Warranty standing of the underlying device, when a claim was raised against
+  // a device this shop actually sold (a hand-entered claim has no unit).
+  const results = claims.map((claim) => {
+    let warranty = null;
+    if (claim.unit) {
+      const u = claim.unit;
+      const active = u.status === 'sold' && u.warrantyExpiry && new Date(u.warrantyExpiry) >= new Date();
+      warranty = {
+        status: u.status !== 'sold' ? 'not_sold' : (active ? 'active' : 'expired'),
+        soldAt: u.soldAt,
+        months: u.warrantyMonths,
+        expiry: u.warrantyExpiry,
+        brandMonths: u.warrantyBrandMonths,
+        shopMonths: u.warrantyShopMonths,
+        brandExpiry: u.warrantyBrandExpiry,
+        shopExpiry: u.warrantyShopExpiry,
+      };
+    }
+    return { claim, warranty };
+  });
+  ok(res, { results, count: results.length });
 });
-
 // @route GET /api/warranty-claims/summary
 // Counts by status — independent of whatever search/status filter the claims
 // list itself is currently showing, so the dashboard always reflects the truth.

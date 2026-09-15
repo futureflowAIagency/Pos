@@ -1162,5 +1162,38 @@ its named bottlenecks were genuinely present here. Client approved fixing them (
 
 ---
 
+### ✅ Fix — Warranty Search by Number only matched the exact claim code (2026-09-15)
+
+Client's screenshot: searched the customer's phone number and got "No warranty claim found
+with that number", even though a claim for that exact customer existed (visible in the status
+counts). Root cause: `findClaimByNumber` matched ONLY an exact `claimNo` (e.g.
+`WC-12345678-42`) - but in practice a shopkeeper has the customer's phone number on hand far
+more often than the generated code printed on a slip that may be lost, so a phone-number search
+always 404'd even when the claim genuinely existed.
+
+- Widened to a partial, case-insensitive match (same idiom as Invoice Search's `GET
+  /sales/search`) across `claimNo`, `customerPhone`, `customerName`, `imei1`, `imei2`, `serial`.
+  Returns an **array** of matches now (0, 1, or many - e.g. the same phone number across two
+  separate visits) instead of a single claim or a 404.
+- `ClaimWarranty.jsx`: exactly one match still shows the full detail directly (the old feel,
+  preserved for the "I have the real claim number" case); more than one shows a pick-list
+  (claim no, status, product, customer, date) with a "back to the N matches" link once one is
+  opened; zero matches shows a plain "try phone/name/IMEI" hint instead of a red error, since an
+  unmatched search is a normal outcome now, not a failure.
+- Real bug caught while writing the fix: the new regex-search code called `escapeRegex`, which
+  didn't exist in this controller (only in `saleController.js`) - added it locally rather than
+  importing across controllers, matching how the same small helper is already duplicated
+  per-file elsewhere in this codebase.
+- Verified: server `node --check` + full `app.js` import-chain + client `vite build`; a 13-case
+  fixture reproducing the exact reported scenario (phone-number search 404 -> 200, partial
+  phone digits, customer name, device serial, two claims on one phone number both returned,
+  blank input still a clean 400) - 13/13; then reproduced live in the browser with the client's
+  own numbers from the screenshot (Pc Power PGM105 mouse, customer Siyam, 01985478547) - search
+  correctly showed "2 matching claims - pick one", selecting one rendered the full detail
+  (branch, product, serial, problem, received items, customer, status history), and every
+  `/warranty-claims/*` network call came back 200 with zero console errors.
+
+---
+
 ### How to resume after context loss
 1. Read this whole file. 2. Check the Phase Plan status markers (§3) for the first non-✅ phase. 3. Re-read that phase's bullet list + §4 conventions. 4. `git log --oneline` and `git status` to see what's committed. 5. Continue; update §3 status + §5 change log when done.
