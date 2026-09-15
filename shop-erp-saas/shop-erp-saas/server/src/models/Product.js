@@ -54,4 +54,8 @@ productSchema.virtual('discountedPrice').get(function () {
 });
 productSchema.set('toJSON', { virtuals: true });
 
+productSchema.index({ business: 1, branch: 1, createdAt: -1 }); // list view's default sort
+productSchema.index({ business: 1, branch: 1, category: 1 }); // category filter
+productSchema.index({ business: 1, branch: 1, barcode: 1 }); // scan-to-find lookup
+
 export default mongoose.model('Product', productSchema);

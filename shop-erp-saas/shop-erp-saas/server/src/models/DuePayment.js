@@ -26,4 +26,6 @@ const duePaymentSchema = new mongoose.Schema(
 
 duePaymentSchema.index({ business: 1, date: -1 });
 
+duePaymentSchema.index({ business: 1, branch: 1, date: -1 }); // due-collection history
+
 export default mongoose.model('DuePayment', duePaymentSchema);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ShieldQuestion, Search, CheckCircle2, ClipboardList, Printer, PackageOpen, Trash2, Package, Send, PackageCheck } from 'lucide-react';
+import { ShieldQuestion, Search, CheckCircle2, ClipboardList, Printer, PackageOpen, Trash2, Package, Send, PackageCheck, Hash, Plus, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
@@ -45,7 +45,14 @@ const emptyForm = {
   unit: null, product: null, customer: null,
   productName: '', imei1: '', imei2: '', serial: '',
   customerName: '', customerPhone: '', customerNid: '', customerAddress: '', problem: '',
+  // what the customer handed in along with the device (Box / Charger / ...)
+  receivedItems: [],
 };
+
+// The three common things handed in with a device, offered as one-click
+// presets; anything else is typed into the box next to them, so a claim can
+// list as many items as it actually came with.
+const CONDITION_PRESETS = ['Box', 'Charger', 'Only Mobile'];
 
 export default function ClaimWarranty() {
   const confirm = useConfirm();
@@ -60,6 +67,17 @@ export default function ClaimWarranty() {
   // Delivered to Customer, and stays reprintable from the list forever after
   // (both receipts for a claim live on for later rechecking)
   const [printDelivery, setPrintDelivery] = useState(null);
+
+  // "Product / Item Condition" — preset dropdown + free-text box feeding one list
+  const [itemPreset, setItemPreset] = useState('');
+  const [itemText, setItemText] = useState('');
+
+  // Warranty Search by Number — pull a whole claim back up from the number
+  // printed on the customer's slip, without scrolling the claims list.
+  const [numberQuery, setNumberQuery] = useState('');
+  const [numberBusy, setNumberBusy] = useState(false);
+  const [numberResult, setNumberResult] = useState(null); // { claim, warranty }
+  const [numberError, setNumberError] = useState('');
 
   const [claims, setClaims] = useState([]);
   const [search, setSearch] = useState('');
@@ -81,6 +99,32 @@ export default function ClaimWarranty() {
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
+  // Add one item to the claim's received-items list, from either the preset
+  // dropdown or the free-text box. De-duped case-insensitively so the same
+  // thing can't be listed twice.
+  const addReceivedItem = (raw) => {
+    const v = String(raw || '').trim();
+    if (!v) return;
+    setForm((f) => (
+      f.receivedItems.some((x) => x.toLowerCase() === v.toLowerCase())
+        ? f
+        : { ...f, receivedItems: [...f.receivedItems, v] }
+    ));
+  };
+  const removeReceivedItem = (v) => setForm((f) => ({ ...f, receivedItems: f.receivedItems.filter((x) => x !== v) }));
+
+  const searchByNumber = async () => {
+    if (!numberQuery.trim()) return;
+    setNumberBusy(true); setNumberError(''); setNumberResult(null);
+    try {
+      const { data } = await api.get('/warranty-claims/by-number', { params: { number: numberQuery.trim() } });
+      setNumberResult(data.data);
+    } catch (e) {
+      setNumberError(e.response?.data?.message || 'Error');
+    }
+    setNumberBusy(false);
+  };
+
   const lookup = async () => {
     if (!lookupImei.trim()) return;
     setLooking(true); setLookupHint('');
@@ -93,12 +137,15 @@ export default function ClaimWarranty() {
         customerName: r.customerName || '', customerPhone: r.customerPhone || '',
         customerNid: r.customerNid || '', customerAddress: r.customerAddress || '',
         problem: '',
+        // keep whatever the counter has already ticked off — the IMEI lookup
+        // fills in device/customer details, it doesn't know what was handed in
+        receivedItems: form.receivedItems,
       });
       const wLabel = r.warrantyStatus === 'active' ? 'warranty is active' : r.warrantyStatus === 'expired' ? 'warranty has expired' : 'not marked sold yet';
       setLookupHint(`Found: ${r.productName}${r.productVariant ? ` (${r.productVariant})` : ''} — ${wLabel}. Details filled in below.`);
     } catch (e) {
       if (e.response?.status === 404) {
-        setForm({ ...emptyForm, imei1: lookupImei.trim() });
+        setForm({ ...emptyForm, imei1: lookupImei.trim(), receivedItems: form.receivedItems });
         setLookupHint('Not found in your shop\'s records — enter the details manually below.');
       } else toast.error(e.response?.data?.message || 'Error');
     }
@@ -114,6 +161,7 @@ export default function ClaimWarranty() {
       toast.success(`Claim ${data.data.claim.claimNo} created`);
       setPrintClaim(data.data.claim);
       setForm(emptyForm); setLookupImei(''); setLookupHint('');
+      setItemPreset(''); setItemText('');
       load(); loadSummary();
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
     setSaving(false);
@@ -148,6 +196,24 @@ export default function ClaimWarranty() {
         ))}
       </div>
 
+      {/* Warranty Search by Number — the customer brings back the slip they were
+          given, and the counter pulls the whole claim up from that number alone. */}
+      <div className="card p-4 space-y-3">
+        <h3 className="font-semibold flex items-center gap-2"><Hash size={16} /> Warranty Search by Number</h3>
+        <p className="text-sm text-slate-500">Enter the Warranty (claim) number printed on the customer's receipt to pull up that claim's full details.</p>
+        <div className="flex items-center gap-2">
+          <Search size={18} className="text-slate-400 shrink-0" />
+          <input className="input font-mono" placeholder="e.g. WC-12345678-42" value={numberQuery}
+            onChange={(e) => setNumberQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') searchByNumber(); }} />
+          <button className="btn-primary shrink-0" disabled={numberBusy} onClick={searchByNumber}>{numberBusy ? 'Searching...' : 'Search'}</button>
+          {(numberResult || numberError) && (
+            <button className="btn-ghost shrink-0" onClick={() => { setNumberResult(null); setNumberError(''); setNumberQuery(''); }}>Clear</button>
+          )}
+        </div>
+        {numberError && <p className="text-sm text-red-500">{numberError}</p>}
+        {numberResult && <WarrantyNumberResult data={numberResult} onPrint={() => setPrintClaim(numberResult.claim)} onPrintDelivery={() => setPrintDelivery(numberResult.claim)} />}
+      </div>
+
       <div className="card p-4 space-y-3">
         <p className="text-sm text-slate-500">Search by the device's IMEI/serial to auto-fill its product &amp; customer details — or skip the search and fill the form in by hand (e.g. a device bought elsewhere).</p>
         <div className="flex items-center gap-2">
@@ -169,6 +235,49 @@ export default function ClaimWarranty() {
           <div><label className="label">Customer NID</label><input className="input" value={form.customerNid} onChange={set('customerNid')} /></div>
           <div><label className="label">Customer Address</label><input className="input" value={form.customerAddress} onChange={set('customerAddress')} /></div>
         </div>
+
+        {/* Product / Item Condition — what physically came in with the device.
+            Pick a common one from the dropdown or type anything else; both add
+            to the same list, so a claim can carry several items at once. */}
+        <div className="pt-2 border-t border-slate-200 dark:border-slate-700 space-y-2">
+          <label className="label mb-0 flex items-center gap-1.5"><PackageOpen size={14} /> Product / Item Condition</label>
+          <p className="text-xs text-slate-400">What did the customer hand in with the device? Add as many items as needed — they're printed on the claim receipt.</p>
+          <div className="flex flex-wrap gap-2 items-center">
+            <select
+              className="input !w-auto min-w-[150px]"
+              value={itemPreset}
+              onChange={(e) => { addReceivedItem(e.target.value); setItemPreset(''); }}
+            >
+              <option value="">Select item...</option>
+              {CONDITION_PRESETS.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <input
+              className="input !w-auto flex-1 min-w-[160px]"
+              placeholder="Or type another item (e.g. Earphone, SIM tray)"
+              value={itemText}
+              onChange={(e) => setItemText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addReceivedItem(itemText); setItemText(''); } }}
+            />
+            <button type="button" className="btn-ghost shrink-0" onClick={() => { addReceivedItem(itemText); setItemText(''); }}>
+              <Plus size={15} /> Add
+            </button>
+          </div>
+          {form.receivedItems.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {form.receivedItems.map((it) => (
+                <span key={it} className="badge bg-brand-100 text-brand-700 dark:bg-brand-900/40 dark:text-brand-200 flex items-center gap-1">
+                  {it}
+                  <button type="button" className="text-brand-700/70 hover:text-red-500" onClick={() => removeReceivedItem(it)} title={`Remove ${it}`}>
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-400 italic">No items added yet.</p>
+          )}
+        </div>
+
         <div className="flex justify-end">
           <button className="btn-primary" disabled={saving} onClick={submit}>{saving ? 'Submitting...' : 'Submit Claim & Print Receipt'}</button>
         </div>
@@ -197,7 +306,13 @@ export default function ClaimWarranty() {
             </div>
           ) },
           { key: 'productName', label: 'Product', render: (r) => (
-            <div>{r.productName}{(r.imei1 || r.serial) && <div className="text-xs text-slate-400">{r.imei1 || r.serial}</div>}</div>
+            <div>
+              {r.productName}
+              {(r.imei1 || r.serial) && <div className="text-xs text-slate-400">{r.imei1 || r.serial}</div>}
+              {r.receivedItems?.length > 0 && (
+                <div className="text-xs text-brand-500">With: {r.receivedItems.join(', ')}</div>
+              )}
+            </div>
           ) },
           { key: 'createdAt', label: 'Date', render: (r) => fmtDateTime(r.createdAt) },
           { key: 'status', label: 'Status', render: (r) => (
@@ -226,6 +341,63 @@ export default function ClaimWarranty() {
       <PrintWrapper open={!!printDelivery} onClose={() => setPrintDelivery(null)} title="Delivery Confirmation">
         {printDelivery && <WarrantyDeliveryReceipt claim={printDelivery} business={business} />}
       </PrintWrapper>
+    </div>
+  );
+}
+
+// Result panel for "Warranty Search by Number" — everything the counter needs
+// about that one claim, including the underlying device's warranty standing
+// when the claim was raised against a device this shop actually sold.
+function WarrantyNumberResult({ data, onPrint, onPrintDelivery }) {
+  const { claim, warranty } = data;
+  const Row = ({ label, value }) => (
+    value ? <div className="flex gap-2"><span className="text-slate-400 shrink-0 w-32">{label}</span><span className="font-medium break-words">{value}</span></div> : null
+  );
+  const W_LABEL = { active: 'Active', expired: 'Expired', not_sold: 'Not marked sold' };
+  const W_CLASS = { active: 'bg-green-100 text-green-700', expired: 'bg-red-100 text-red-700', not_sold: 'bg-slate-200 text-slate-700' };
+
+  return (
+    <div className="rounded-lg border border-brand-200 dark:border-slate-700 bg-brand-50/60 dark:bg-slate-800/60 p-3 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold font-mono">{claim.claimNo}</span>
+          <span className={`badge ${STATUS_BADGE[claim.status]}`}>{STATUS_LABEL[claim.status] || claim.status}</span>
+          {warranty && <span className={`badge ${W_CLASS[warranty.status]}`}>Warranty: {W_LABEL[warranty.status]}</span>}
+        </div>
+        <div className="flex gap-1">
+          <button className="btn-ghost p-1.5" title="Print claim receipt" onClick={onPrint}><Printer size={15} /></button>
+          {claim.status === 'delivered_to_customer' && (
+            <button className="btn-ghost p-1.5 text-green-600" title="Print delivery confirmation" onClick={onPrintDelivery}><PackageOpen size={15} /></button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-sm">
+        <Row label="Submitted" value={fmtDateTime(claim.createdAt)} />
+        <Row label="Branch" value={claim.branch?.name} />
+        <Row label="Product" value={claim.productName} />
+        <Row label="IMEI 1" value={claim.imei1} />
+        <Row label="IMEI 2" value={claim.imei2} />
+        <Row label="Serial" value={claim.serial} />
+        <Row label="Problem" value={claim.problem} />
+        <Row label="Items received" value={claim.receivedItems?.join(', ')} />
+        <Row label="Customer" value={claim.customerName} />
+        <Row label="Phone" value={claim.customerPhone} />
+        <Row label="NID" value={claim.customerNid} />
+        <Row label="Address" value={claim.customerAddress} />
+        {warranty && <Row label="Sold on" value={warranty.soldAt ? fmtDateTime(warranty.soldAt) : ''} />}
+        {warranty?.brandExpiry && <Row label="Brand warranty till" value={fmtDateTime(warranty.brandExpiry)} />}
+        {warranty?.shopExpiry && <Row label="Shop warranty till" value={fmtDateTime(warranty.shopExpiry)} />}
+      </div>
+
+      {claim.statusHistory?.length > 0 && (
+        <div className="text-xs text-slate-500 border-t border-brand-200 dark:border-slate-700 pt-2">
+          <span className="font-medium">History: </span>
+          {claim.statusHistory.map((h, i) => (
+            <span key={i}>{i > 0 && ' → '}{STATUS_LABEL[h.status] || h.status} ({fmtDateTime(h.at)})</span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

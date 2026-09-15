@@ -9,6 +9,12 @@ const saleItemSchema = new mongoose.Schema(
     mrp: { type: Number, default: 0 },
     discountPercent: { type: Number, default: 0 },
     sellingPrice: { type: Number, required: true, default: 0 },
+    // true when the cashier set this one line's price/discount by hand via the
+    // cart's "Separate Price" screen, instead of it coming from the product's
+    // own price + percentage discount. Purely informational (the authoritative
+    // figure is always `sellingPrice`) — it lets the invoice show that this
+    // line was individually priced rather than looking like a data error.
+    priceOverridden: { type: Boolean, default: false },
     // ---- mobile-shop specific (optional) ----
     unit: { type: mongoose.Schema.Types.ObjectId, ref: 'PhoneUnit', default: null },
     imei1: { type: String, default: '' },
@@ -96,6 +102,14 @@ const saleSchema = new mongoose.Schema(
     // overpayment the shop still owes, so the invoice would offer a second,
     // unowed "Money Back" payout for every return ever processed.
     returnCredit: { type: Number, default: 0 },
+    // Marked at the cart via the EMI checkbox: this sale was bought on
+    // instalments rather than paid in full. Purely a classification — payments,
+    // due and stock all work exactly as they do for any other sale — but it
+    // lets any due it leaves be shown as "EMI Due" (with the products it covers)
+    // in the Customers screen, separately from an ordinary due.
+    // NOTE: distinct from the Installment/EMI-plan module, which runs its own
+    // schedule and deliberately creates no Sale document.
+    isEmi: { type: Boolean, default: false, index: true },
     soldBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     // The employee who actually rang this sale up, typed at the counter — often
     // different from `soldBy` (the login account), since several employees
@@ -109,5 +123,7 @@ const saleSchema = new mongoose.Schema(
 );
 
 saleSchema.index({ business: 1, createdAt: -1 });
+
+saleSchema.index({ business: 1, branch: 1, createdAt: -1 }); // invoice list + date-range reports
 
 export default mongoose.model('Sale', saleSchema);

@@ -23,4 +23,6 @@ const fundSchema = new mongoose.Schema(
 
 fundSchema.index({ business: 1, date: -1 });
 
+fundSchema.index({ business: 1, branch: 1, date: -1 }); // fund history
+
 export default mongoose.model('Fund', fundSchema);

@@ -14,8 +14,19 @@ export const getExpenses = asyncHandler(async (req, res) => {
     if (from) q.date.$gte = new Date(from);
     if (to) q.date.$lte = new Date(to + 'T23:59:59');
   }
-  const expenses = await Expense.find(q).sort('-date').populate('account', 'name accountNumber');
-  ok(res, { expenses, count: expenses.length });
+  // Opt-in pagination: callers that send no page/pageSize (the customer picker
+  // on the EMI screen, for instance) still get the full list exactly as before.
+  const wantsPage = req.query.page !== undefined || req.query.pageSize !== undefined;
+  const pg = Math.max(1, Number(req.query.page) || 1);
+  const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
+
+  let eq = Expense.find(q).sort('-date').populate('account', 'name accountNumber');
+  if (wantsPage) eq = eq.skip((pg - 1) * pageSize).limit(pageSize);
+  const [expenses, total] = await Promise.all([
+    eq,
+    wantsPage ? Expense.countDocuments(q) : Promise.resolve(null),
+  ]);
+  ok(res, { expenses, count: expenses.length, ...(wantsPage ? { total, page: pg, pageSize } : {}) });
 });
 
 export const createExpense = asyncHandler(async (req, res) => {

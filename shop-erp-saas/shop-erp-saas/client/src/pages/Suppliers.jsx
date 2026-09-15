@@ -3,6 +3,7 @@ import { Plus, Pencil, PencilLine, Trash2, Search, Wallet, PackagePlus, ScrollTe
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
+import Pagination from '../components/ui/Pagination.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import StatCard from '../components/ui/StatCard.jsx';
 import PaymentRows from '../components/ui/PaymentRows.jsx';
@@ -14,6 +15,8 @@ import { useConfirm } from '../context/ConfirmContext.jsx';
 
 const empty = { name: '', phone: '', address: '', note: '' };
 const due = (s) => Math.max(0, (s.totalPurchase || 0) - (s.totalPaid || 0));
+
+const PAGE_SIZE = 50;
 
 export default function Suppliers() {
   const confirm = useConfirm();
@@ -33,16 +36,22 @@ export default function Suppliers() {
   const [dueFor, setDueFor] = useState(null); // direct due correction
   const [ledgerFor, setLedgerFor] = useState(null);
   const [productsFor, setProductsFor] = useState(null);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
 
-  const load = async () => {
-    const { data } = await api.get('/suppliers', { params: { search } });
+  const load = async (arg) => {
+    const toPage = Number(arg) > 0 ? Number(arg) : page;
+    const { data } = await api.get('/suppliers', { params: { search, page: toPage, pageSize: PAGE_SIZE } });
     setSuppliers(data.data.suppliers);
+    setTotal(data.data.total ?? data.data.suppliers.length);
+    setPage(toPage);
   };
   const loadDashboard = async () => {
     const { data } = await api.get('/suppliers/dashboard/summary');
     setDash(data.data);
   };
-  useEffect(() => { const t = setTimeout(load, 300); return () => clearTimeout(t); }, [search]);
+  // a new search always restarts at page 1
+  useEffect(() => { const t = setTimeout(() => load(1), 300); return () => clearTimeout(t); }, [search]);
   useEffect(() => { loadDashboard(); }, []);
   const refreshAll = () => { load(); loadDashboard(); };
 
@@ -141,6 +150,7 @@ export default function Suppliers() {
         rows={suppliers}
         empty="No suppliers yet"
       />
+      <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={load} />
 
       {/* Add / Edit */}
       <Modal open={modal} onClose={() => setModal(false)} title={editId ? 'Edit Supplier' : 'Add Supplier'}

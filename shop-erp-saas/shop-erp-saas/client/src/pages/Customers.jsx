@@ -3,6 +3,7 @@ import { Plus, Trash2, History, HandCoins, Printer, Pencil, CalendarClock } from
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
+import Pagination from '../components/ui/Pagination.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import AccountSelect from '../components/ui/AccountSelect.jsx';
@@ -12,6 +13,7 @@ import { taka, fmtDate, fmtDateTime } from '../utils/format.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useConfirm } from '../context/ConfirmContext.jsx';
 
+const PAGE_SIZE = 50;
 const emptyForm = { name: '', phone: '', email: '', address: '', nid: '', dueDate: '' };
 const toDateInput = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
 
@@ -19,6 +21,8 @@ export default function Customers() {
   const { business } = useAuth();
   const confirm = useConfirm();
   const [customers, setCustomers] = useState([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [modal, setModal] = useState(false);
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(emptyForm);
@@ -31,7 +35,15 @@ export default function Customers() {
   // reprint a past invoice from a customer's history (unlimited times)
   const [printSale, setPrintSale] = useState(null);
 
-  const load = async () => { const { data } = await api.get('/customers'); setCustomers(data.data.customers); };
+  const load = async (arg) => {
+    // also used as a bare callback after save/delete — ignore anything that
+    // isn't a real page number (e.g. a click event) and stay where we are
+    const toPage = Number(arg) > 0 ? Number(arg) : page;
+    const { data } = await api.get('/customers', { params: { page: toPage, pageSize: PAGE_SIZE } });
+    setCustomers(data.data.customers);
+    setTotal(data.data.total ?? data.data.customers.length);
+    setPage(toPage);
+  };
   useEffect(() => { load(); }, []);
 
   const openNew = () => { setEditId(null); setForm(emptyForm); setModal(true); };
@@ -85,6 +97,25 @@ export default function Customers() {
           { key: 'totalDue', label: 'Due', className: 'text-right', render: (r) => (
             <div>
               <span className={r.totalDue > 0 ? 'text-red-500 font-semibold' : ''}>{taka(r.totalDue)}</span>
+              {/* Split the total into ordinary due vs due that came from a sale
+                  marked EMI at the cart, so the two are never confused. Only
+                  shown when there is actually EMI due to separate out. */}
+              {r.emiDue > 0 && (
+                <div className="mt-1 space-y-0.5">
+                  {r.regularDue > 0 && (
+                    <p className="text-xs text-slate-500">Regular Due: {taka(r.regularDue)}</p>
+                  )}
+                  <p className="text-xs">
+                    <span className="badge bg-amber-100 text-amber-700">EMI Due</span>
+                    <span className="font-semibold text-amber-700 ml-1">{taka(r.emiDue)}</span>
+                  </p>
+                  {r.emiInvoices?.map((inv) => (
+                    <p key={inv.invoiceNo} className="text-[11px] text-slate-400 leading-tight">
+                      {inv.products.join(', ') || '—'} — {taka(inv.due)}
+                    </p>
+                  ))}
+                </div>
+              )}
               {r.totalDue > 0 && r.dueDate && (
                 <p className={`text-xs flex items-center justify-end gap-1 mt-0.5 ${new Date(r.dueDate) <= new Date() ? 'text-red-500' : 'text-slate-400'}`}>
                   <CalendarClock size={11} /> {fmtDate(r.dueDate)}
@@ -106,6 +137,7 @@ export default function Customers() {
         ]}
         rows={customers}
       />
+      <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={load} />
 
       {/* Add / Edit */}
       <Modal open={modal} onClose={() => setModal(false)} title={editId ? 'Edit Customer' : 'Add Customer'}
@@ -128,10 +160,22 @@ export default function Customers() {
         {history && (
           <DataTable
             columns={[
-              { key: 'invoiceNo', label: 'Invoice' },
+              { key: 'invoiceNo', label: 'Invoice', render: (r) => (
+                <div>
+                  <span>{r.invoiceNo}</span>
+                  {r.isEmi && <span className="badge bg-amber-100 text-amber-700 ml-1">EMI</span>}
+                  <div className="text-xs text-slate-400 truncate max-w-[220px]">
+                    {(r.items || []).map((i) => (i.qty > 1 ? `${i.name} ×${i.qty}` : i.name)).join(', ')}
+                  </div>
+                </div>
+              )},
               { key: 'createdAt', label: 'Date', render: (r) => fmtDateTime(r.createdAt) },
               { key: 'total', label: 'Total', className: 'text-right', render: (r) => taka(r.total) },
-              { key: 'due', label: 'Due', className: 'text-right', render: (r) => taka(r.due) },
+              { key: 'due', label: 'Due', className: 'text-right', render: (r) => (
+                r.due > 0
+                  ? <span className={r.isEmi ? 'text-amber-700 font-semibold' : 'text-red-500'}>{taka(r.due)}{r.isEmi ? ' (EMI)' : ''}</span>
+                  : taka(r.due)
+              )},
               { key: 'print', label: '', className: 'text-right', render: (r) => (
                 <button onClick={() => setPrintSale(r)} className="btn-ghost p-1.5" title="Print invoice"><Printer size={15} /></button>
               )},

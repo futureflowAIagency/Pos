@@ -17,4 +17,6 @@ const expenseSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+expenseSchema.index({ business: 1, branch: 1, date: -1 }); // expense list
+
 export default mongoose.model('Expense', expenseSchema);

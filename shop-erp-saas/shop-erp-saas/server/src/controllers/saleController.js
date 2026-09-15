@@ -31,11 +31,13 @@ const genInvoiceNo = () =>
   'INV-' + Date.now().toString().slice(-8) + '-' + Math.floor(Math.random() * 90 + 10);
 
 // @route POST /api/sales  (POS checkout)
-// body: { items:[{product, qty, unit?}], discount, paid, paymentMethod, payments?:[{method,amount}], customer, customerName, customerPhone, customerNid, customerAddress, soldByName }
+// body: { items:[{product, qty, unit?, unitPrice?}], discount, paid, paymentMethod, payments?:[{method,amount}], customer, customerName, customerPhone, customerNid, customerAddress, soldByName, isEmi? }
 // `payments` (split/multi-tender) takes precedence when provided; otherwise a single
 // tender is synthesized from paymentMethod+paid (back-compat with older clients).
+// An item's optional `unitPrice` is the cart's "Separate Price" per-line override —
+// see where it's applied below.
 export const createSale = asyncHandler(async (req, res) => {
-  const { items = [], discount = 0, paid = 0, paymentMethod = 'cash', payments: reqPayments = null, customer = null, customerName: reqName = '', customerPhone = '', customerNid = '', customerAddress = '', soldByName = '' } = req.body;
+  const { items = [], discount = 0, paid = 0, paymentMethod = 'cash', payments: reqPayments = null, customer = null, customerName: reqName = '', customerPhone = '', customerNid = '', customerAddress = '', soldByName = '', isEmi = false } = req.body;
   if (!items.length) throw new ApiError(400, 'No items in sale');
   // Customer identity is OPTIONAL for every shop type — a counter/walk-in sale
   // needs no name or phone. The one exception is enforced below, once the due is
@@ -87,8 +89,26 @@ export const createSale = asyncHandler(async (req, res) => {
         // what lets stock bought at an earlier price keep selling at that
         // price even after the product is restocked at a new one.
         const { purchasePrice: unitCost, sellingPriceBase } = await resolveLineCost(req, session, product, { unit, qty: it.qty });
-        const pct = Math.min(Math.max(product.discountPercent || 0, 0), 100);
-        const unitPrice = Math.round((sellingPriceBase * (1 - pct / 100)) * 100) / 100;
+        let pct = Math.min(Math.max(product.discountPercent || 0, 0), 100);
+        let unitPrice = Math.round((sellingPriceBase * (1 - pct / 100)) * 100) / 100;
+
+        // "Separate Price" (per-line pricing): the cashier set this one line's
+        // final price by hand in the cart, so it wins over the product's own
+        // price/percentage. Only a real, non-negative number counts — `!= null`
+        // and an explicit isFinite check, never a truthy test, so a deliberate
+        // ৳0 line (a giveaway/replacement) is honored instead of silently
+        // falling back to the full price. `mrp` deliberately keeps the original
+        // base price so the invoice can still show what it would have been, and
+        // discountPercent is re-derived from the two so every existing display
+        // (receipt, order details, reports) stays self-consistent.
+        const override = it.unitPrice;
+        const hasOverride = override != null && override !== '' && Number.isFinite(Number(override)) && Number(override) >= 0;
+        if (hasOverride) {
+          unitPrice = Math.round(Number(override) * 100) / 100;
+          pct = sellingPriceBase > 0
+            ? Math.min(Math.max(Math.round((1 - unitPrice / sellingPriceBase) * 10000) / 100, 0), 100)
+            : 0;
+        }
 
         const line = {
           product: product._id,
@@ -98,6 +118,7 @@ export const createSale = asyncHandler(async (req, res) => {
           mrp: sellingPriceBase,
           discountPercent: pct,
           sellingPrice: unitPrice,
+          priceOverridden: hasOverride,
         };
 
         if (unit) {
@@ -189,6 +210,10 @@ export const createSale = asyncHandler(async (req, res) => {
         // real tender for the paid portion — legacy field, kept as the primary/first tender
         paidVia: primaryMethod,
         payments: finalPayments,
+        // EMI checkbox at the cart — classification only; nothing about how the
+        // money/stock is handled changes, but any due this leaves is reported as
+        // "EMI Due" against the customer instead of an ordinary due.
+        isEmi: !!isEmi,
         soldBy: req.user._id,
         // the employee typed at the counter, if any — falls back to the login's
         // own name so a shop that never uses this field sees no change

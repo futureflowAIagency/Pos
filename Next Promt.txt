@@ -1,0 +1,82 @@
+POS System — New Feature Requirements
+1. Claim Warranty → Warranty Search by Number
+Claim Warranty section-এ নতুন একটি “Warranty Search by Number” system যোগ করতে হবে।
+Warranty Number দিয়ে সরাসরি warranty information search করা যাবে।
+Search করলে সংশ্লিষ্ট warranty-এর প্রয়োজনীয় তথ্য সহজে দেখা যাবে।
+2. Claim Warranty → Product/Item Condition
+Claim Warranty section-এ একটি নতুন section যোগ করতে হবে যেখানে একটি dropdown menu থাকবে।
+Dropdown options:
+Box
+Charger
+Only Mobile
+এর পাশাপাশি একটি text/input field থাকবে, যেখানে প্রয়োজন অনুযায়ী একাধিক item/জিনিস লেখা বা add করা যাবে। অর্থাৎ user চাইলে একই warranty claim-এর ক্ষেত্রে ২–৩টি বা প্রয়োজনীয় একাধিক item উল্লেখ করতে পারবে।
+3. Cart → EMI Option
+Cart section-এ একটি নতুন “EMI” option যোগ করতে হবে।
+EMI-এর পাশে একটি checkbox থাকবে।
+Checkbox-এর default state হবে Unselected।
+User checkbox select করলে বুঝতে হবে যে productটি EMI-এর মাধ্যমে কেনা হয়েছে।
+Checkbox unselected থাকলে বুঝতে হবে যে productটি সম্পূর্ণ টাকা পরিশোধ করে কেনা হয়েছে।
+Existing cart/payment functionality যেন এতে কোনোভাবে নষ্ট না হয়।
+4. Products → Stock Print by Date
+Products section-এ নতুন একটি “Stock Print by Date” feature যোগ করতে হবে।
+এর মূল উদ্দেশ্য হলো দিনের শেষে user যেন যেকোনো দুইটি date-এর stock/report তুলনা করে বুঝতে পারে কী কী product ছিল, কী কী বিক্রি হয়েছে এবং বর্তমানে কী কী নেই।
+Date Selection
+User যেন নিজের প্রয়োজন অনুযায়ী যেকোনো দুইটি date manually select করতে পারে।
+উদাহরণ:
+গতকাল বনাম আজ
+পরশু বনাম আজ
+Weekend/off day-এর কারণে প্রয়োজন হলে অন্য যেকোনো date বনাম আজ
+অর্থাৎ date comparison কোনো fixed “Yesterday vs Today” logic-এর মধ্যে সীমাবদ্ধ থাকবে না।
+Report-এ যা থাকবে
+Selected দুইটি date-এর জন্য বিস্তারিত report তৈরি ও print করা যাবে।
+প্রথম Date-এর Report:
+Selected date-এর full stock information
+কোন কোন product ছিল
+Product-এর quantity
+প্রয়োজনীয় variant/details
+ঐ দিনে কোন কোন product sell হয়েছে
+কোন customer কী product কিনেছে
+সংশ্লিষ্ট customer-এর নাম
+কোন salesperson/employee productটি sell করেছে, তার নাম
+দ্বিতীয় Date-এর Report:
+একইভাবে দ্বিতীয় date-এর full stock information
+কোন কোন product ছিল
+Quantity
+কোনগুলো sell হয়েছে
+কোন customer কী কিনেছে
+Customer name
+কোন salesperson/employee sale করেছে, তার নাম
+5. Comparison-এর মূল উদ্দেশ্য
+Reportটি এমনভাবে তৈরি করতে হবে যাতে user খুব সহজেই বুঝতে পারে:
+আগের selected date-এ shop-এ কী কী stock ছিল
+পরের selected date-এ কী কী stock আছে
+কোন product কমেছে
+কোন product বিক্রি হয়েছে
+কোন product বর্তমানে নেই
+কত quantity sell হয়েছে
+কোন customer কী কিনেছে
+কে সেই product sell করেছে
+দুইটি date-এর report আলাদাভাবে date সহ clearly print হবে, যাতে পাশাপাশি/তুলনা করে বোঝা সহজ হয়।
+Important: Date selection সম্পূর্ণ flexible হতে হবে। User নিজের প্রয়োজন অনুযায়ী যেকোনো দুইটি date নির্বাচন করে stock comparison report generate ও print করতে পারবে।
+
+
+4. Customer Due → EMI Due Information
+Customer Due section-এর সাথে EMI system-এর সম্পর্ক স্পষ্টভাবে দেখানোর জন্য নতুন তথ্য যোগ করতে হবে।
+কোনো customer-এর due যদি EMI-এর কারণে হয়ে থাকে, তাহলে Customer Due section-এ স্পষ্টভাবে “EMI Due” লেখা থাকতে হবে।
+কোন product-এর জন্য EMI Due হয়েছে, সেটিও পরিষ্কারভাবে উল্লেখ থাকতে হবে।
+Product-এর নামের পাশাপাশি প্রয়োজনীয় product information থাকলে সেটিও দেখাতে হবে, যাতে user সহজেই বুঝতে পারে কোন product-এর কত টাকা EMI due আছে।
+সাধারণ Due এবং EMI Due যেন আলাদাভাবে সহজে শনাক্ত করা যায়।
+Cart-এ EMI checkbox select করার পর সেই EMI information অবশ্যই Customer Due/Customer Ledger-এ সঠিকভাবে সংরক্ষিত ও প্রদর্শিত হতে হবে।
+
+Cart → Individual Product Discount / Separate Price
+Cart section-এ বর্তমানে যে average discount/price adjustment system আছে, সেটার পাশাপাশি একটি নতুন individual product-wise pricing/discount system যোগ করতে হবে।
+ধরুন, একজন customer একসাথে ৩টি ভিন্ন product কিনল। তখন user যেন প্রতিটি product-এর জন্য আলাদাভাবে discount বা final selling price নির্ধারণ করতে পারে।
+User-Friendly UI
+Cart-এ একটি “Separate Price” button রাখতে হবে।
+Button-এ click করলে একটি আলাদা section/modal খুলবে।
+সেখানে cart-এর প্রতিটি product আলাদাভাবে দেখাবে।
+প্রতিটি product-এর পাশে user আলাদা discount বা final price দিতে পারবে।
+অর্থাৎ Product 1, Product 2 এবং Product 3-এর জন্য তিনটি আলাদা price/discount সেট করা যাবে।
+এইভাবে কোনো product-এ বেশি discount এবং অন্য product-এ কম discount দেওয়া সম্ভব হবে।
+Separate Price ব্যবহার না করলে বর্তমান average discount system আগের মতোই কাজ করবে।
+মূল উদ্দেশ্য: একই customer একাধিক ভিন্ন product কিনলে প্রতিটি product-এর জন্য যেন আলাদাভাবে সঠিক selling price/discount সেট করা যায়, এবং পুরো process-টি যেন user-friendly ও সহজে বোঝা যায়।

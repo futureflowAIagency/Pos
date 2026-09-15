@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Minus, Trash2, Search, Printer, Receipt, PauseCircle, ListChecks, ScanLine } from 'lucide-react';
+import { Plus, Minus, Trash2, Search, Printer, Receipt, PauseCircle, ListChecks, ScanLine, Tags } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import { taka, fmtDate, fmtDateTime, expiryStatus, daysUntil } from '../utils/format.js';
@@ -86,6 +86,16 @@ export default function POS() {
   const [pastCustomer, setPastCustomer] = useState(null);
   const [pastSales, setPastSales] = useState([]);
   const [discount, setDiscount] = useState(0);
+  // "Separate Price": per-line final unit price, keyed by lineKey. A line with
+  // no entry here prices exactly as before (product price − its own % discount),
+  // so the existing flat/average discount flow is completely untouched unless
+  // the cashier deliberately opens this screen and types a price.
+  const [linePrices, setLinePrices] = useState({});
+  const [sepPriceOpen, setSepPriceOpen] = useState(false);
+  // EMI: this sale was bought on instalments rather than paid in full.
+  // Unselected by default; changes nothing about payments/stock, it only marks
+  // the sale so any due it leaves shows as "EMI Due" against the customer.
+  const [isEmi, setIsEmi] = useState(false);
   // Split/multi-tender payment: one or more { method, amount } rows (req: pay
   // part bKash, part card, part cash, etc. in a single sale).
   const [payments, setPayments] = useState([{ method: 'cash', amount: '' }]);
@@ -380,10 +390,34 @@ export default function POS() {
     if (i.stock != null && Number(val) > i.stock) toast.error('Not enough stock');
     return { ...i, qty: q };
   }));
-  const removeItem = (key) => setCart((c) => c.filter((i) => lineKey(i) !== key));
-  const resetSale = () => { setCart([]); setDiscount(0); setPayments([{ method: 'cash', amount: '' }]); setPaidTouched(false); setCustPhone(''); setCustName(''); setCustAddress(''); setMatchedCustomer(null); setCustomerNid(''); };
+  const removeItem = (key) => {
+    setCart((c) => c.filter((i) => lineKey(i) !== key));
+    // drop any Separate Price set for a line that's no longer in the cart, so
+    // re-adding the same product later starts from its normal price again
+    setLinePrices((m) => { const { [key]: _drop, ...rest } = m; return rest; });
+  };
+  const resetSale = () => {
+    setCart([]); setDiscount(0); setLinePrices({}); setIsEmi(false);
+    setPayments([{ method: 'cash', amount: '' }]); setPaidTouched(false);
+    setCustPhone(''); setCustName(''); setCustAddress(''); setMatchedCustomer(null); setCustomerNid('');
+  };
 
-  const subTotal = cart.reduce((s, i) => s + unitPrice(i) * Number(i.qty || 0), 0);
+  // The price this line actually sells at: the cashier's Separate Price when one
+  // was set for it, else the normal product price after its own % discount.
+  // `!= null` + isFinite (never a truthy test) so a deliberate ৳0 line is kept
+  // rather than silently falling back to the full price — the server applies the
+  // exact same rule, so what's shown here is always what gets charged.
+  const effUnitPrice = (i) => {
+    const o = linePrices[lineKey(i)];
+    if (o != null && o !== '' && Number.isFinite(Number(o)) && Number(o) >= 0) return Number(o);
+    return unitPrice(i);
+  };
+  const hasLinePrice = (i) => {
+    const o = linePrices[lineKey(i)];
+    return o != null && o !== '' && Number.isFinite(Number(o)) && Number(o) >= 0;
+  };
+
+  const subTotal = cart.reduce((s, i) => s + effUnitPrice(i) * Number(i.qty || 0), 0);
   const total = Math.max(0, subTotal - Number(discount || 0));
   const paidSum = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
   const due = Math.max(0, total - paidSum);
@@ -413,6 +447,9 @@ export default function POS() {
       heldAt: new Date().toISOString(),
       customerName: custName || custPhone || 'No customer',
       custPhone, custName, custAddress, customerNid, discount, payments,
+      // per-line Separate Prices and the EMI mark travel with the held bill, so
+      // resuming it later rings up exactly the same figures
+      linePrices, isEmi,
       itemCount: cart.reduce((s, i) => s + i.qty, 0),
       cart,
     };
@@ -426,6 +463,9 @@ export default function POS() {
     if (cart.length && !confirm('Resuming will replace the current cart. Continue?')) return;
     setCart(h.cart); setCustPhone(h.custPhone || ''); setCustName(h.custName || ''); setCustAddress(h.custAddress || ''); setCustomerNid(h.customerNid || '');
     setDiscount(h.discount || 0);
+    // absent on bills held before these features existed — default to "none set"
+    setLinePrices(h.linePrices || {});
+    setIsEmi(!!h.isEmi);
     // back-compat: older held bills stored a single paid+method instead of payments[]
     setPayments(h.payments?.length ? h.payments : [{ method: h.method || 'cash', amount: h.paid || '' }]);
     setPaidTouched(true); // resumed bill keeps exactly what was held, not re-synced to the new total
@@ -476,8 +516,15 @@ export default function POS() {
     }
     try {
       const { data } = await api.post('/sales', {
-        items: cart.map((i) => i.unitId ? { product: i._id, qty: 1, unit: i.unitId } : { product: i._id, qty: Number(i.qty) }),
+        items: cart.map((i) => {
+          const base = i.unitId ? { product: i._id, qty: 1, unit: i.unitId } : { product: i._id, qty: Number(i.qty) };
+          // only send a price for a line the cashier actually priced by hand;
+          // every other line is priced by the server exactly as it always was
+          if (hasLinePrice(i)) base.unitPrice = Number(linePrices[lineKey(i)]);
+          return base;
+        }),
         discount: Number(discount || 0),
+        isEmi,
         payments: sendPayments,
         customer: matchedCustomer?._id || null,
         customerName: custName.trim(),
@@ -633,7 +680,15 @@ export default function POS() {
               <div className="flex-1">
                 <p className="font-medium">{i.name}</p>
                 <p className="text-xs text-slate-400">
-                  {taka(unitPrice(i))} × {i.qty}{i.discountPercent > 0 ? ` (-${i.discountPercent}%)` : ''}
+                  {hasLinePrice(i) ? (
+                    <>
+                      <span className="line-through mr-1">{taka(unitPrice(i))}</span>
+                      <span className="text-brand-600 font-semibold">{taka(effUnitPrice(i))}</span>
+                      {' '}× {i.qty}
+                    </>
+                  ) : (
+                    <>{taka(unitPrice(i))} × {i.qty}{i.discountPercent > 0 ? ` (-${i.discountPercent}%)` : ''}</>
+                  )}
                 </p>
                 {i.unitId && <p className="text-xs text-brand-500">IMEI: {i.imei1 || i.serial}</p>}
                 {/* a resumed held bill can contain an item that expired since it was held */}
@@ -658,6 +713,33 @@ export default function POS() {
         </div>
 
         <div className="border-t border-slate-200 dark:border-slate-700 mt-3 pt-3 space-y-2 text-sm">
+          {/* Separate Price — set each product's own discount/final price, for a
+              bill where one item is discounted more than another. Untouched, the
+              flat Discount box below keeps working exactly as before. */}
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              className="btn-ghost !py-1 text-xs"
+              disabled={!cart.length}
+              onClick={() => setSepPriceOpen(true)}
+            >
+              <Tags size={14} /> Separate Price
+              {Object.keys(linePrices).length > 0 && (
+                <span className="badge bg-brand-100 text-brand-700 ml-1">{Object.keys(linePrices).length}</span>
+              )}
+            </button>
+            {/* EMI — off by default; ticked means this sale was bought on
+                instalments, so any due it leaves shows as EMI Due on the customer. */}
+            <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
+              <input type="checkbox" checked={isEmi} onChange={(e) => setIsEmi(e.target.checked)} />
+              <span className={isEmi ? 'font-semibold text-brand-600' : ''}>EMI</span>
+            </label>
+          </div>
+          {isEmi && (
+            <p className="text-xs text-brand-600">
+              Marked as EMI — any remaining due will show as <strong>EMI Due</strong> against this customer.
+            </p>
+          )}
           <div>
             <label className="label">Sold By (Employee)</label>
             <input
@@ -802,6 +884,83 @@ export default function POS() {
           )}
         </div>
       </div>
+
+      {/* Separate Price — one row per cart line, each with its own discount %
+          and final price. The two boxes stay in step (type either one, the other
+          follows), same linked-boxes idiom the EMI plan form already uses. */}
+      <Modal
+        open={sepPriceOpen}
+        onClose={() => setSepPriceOpen(false)}
+        title="Separate Price — set each product's own price"
+        size="lg"
+        footer={<>
+          <button className="btn-ghost" onClick={() => { setLinePrices({}); }}>Clear all</button>
+          <button className="btn-primary" onClick={() => setSepPriceOpen(false)}>Done</button>
+        </>}
+      >
+        <p className="text-sm text-slate-500 mb-3">
+          Give any product its own discount or final price. Leave a line untouched and it keeps its
+          normal price — the flat Discount box in the cart still works the same way on top of these.
+        </p>
+        <div className="space-y-2">
+          {cart.map((i) => {
+            const key = lineKey(i);
+            const base = unitPrice(i);
+            const eff = effUnitPrice(i);
+            const pct = base > 0 ? Math.round((1 - eff / base) * 1000) / 10 : 0;
+            const setFinal = (v) => setLinePrices((m) => (v === '' ? (() => { const { [key]: _d, ...r } = m; return r; })() : { ...m, [key]: v }));
+            const setPct = (v) => {
+              if (v === '') return setFinal('');
+              const p = Math.min(Math.max(Number(v) || 0, 0), 100);
+              setFinal(String(Math.round(base * (1 - p / 100) * 100) / 100));
+            };
+            return (
+              <div key={key} className="rounded-lg border border-brand-200 dark:border-slate-700 p-2.5">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div className="min-w-0">
+                    <p className="font-medium truncate">{i.name}</p>
+                    <p className="text-xs text-slate-400">
+                      Normal price {taka(base)} × {i.qty}
+                      {i.unitId && <span className="text-brand-500"> • IMEI {i.imei1 || i.serial}</span>}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xs text-slate-400">Line total</p>
+                    <p className="font-semibold">{taka(eff * Number(i.qty || 0))}</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="label">Discount (%)</label>
+                    <input
+                      className="input" type="number" min="0" max="100" placeholder="0"
+                      value={hasLinePrice(i) ? pct : ''}
+                      onChange={(e) => setPct(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Final price (per unit)</label>
+                    <input
+                      className="input" type="number" min="0" placeholder={String(base)}
+                      value={hasLinePrice(i) ? linePrices[key] : ''}
+                      onChange={(e) => setFinal(e.target.value)}
+                    />
+                  </div>
+                </div>
+                {hasLinePrice(i) && (
+                  <button type="button" className="btn-ghost !py-1 text-xs mt-1.5" onClick={() => setFinal('')}>
+                    Reset to normal price
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          {cart.length === 0 && <p className="text-slate-400 text-center py-6">Cart is empty</p>}
+        </div>
+        <div className="flex justify-between font-semibold mt-3 pt-3 border-t border-brand-200 dark:border-slate-700">
+          <span>Subtotal</span><span>{taka(subTotal)}</span>
+        </div>
+      </Modal>
 
       {/* Held bills */}
       <Modal open={holdsOpen} onClose={() => setHoldsOpen(false)} title="Held Bills" size="lg">

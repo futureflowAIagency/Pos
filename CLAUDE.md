@@ -1096,5 +1096,71 @@ not started, see the note at the end of this entry.
 
 ---
 
+### ✅ Phase 35 — Performance, step 1: pagination + compound indexes + index-usable search (2026-09-15)
+
+The client shared an external AI-written POS/ERP scaling document and asked what of it
+actually applies to **our** system. Rather than answering from the document, audited the real
+codebase and reported back the grounded version: the multi-tenant model (`business`/`branch`
+on every row + `tenantFilter`/`branchFilter`) and the denormalised `Product.stock` snapshot
+already match that document's recommended best practice and need no redesign — but three of
+its named bottlenecks were genuinely present here. Client approved fixing them ("step 1").
+
+**Root causes found (all verified in code, not assumed):**
+1. **No pagination anywhere except Sales.** `GET /products`, `/customers`, `/suppliers`,
+   `/employees`, `/expenses`, `/funds`, `/transfers`, `/installments`, `/warranty-claims` all
+   returned the entire table on every page load. With this shop's ~550-600 product catalog,
+   opening Products pulled every row (plus a `supplier` populate) every single time — the main
+   reason a click took 10-15s.
+2. **Only single-field indexes.** Every branch-scoped query matches `business` AND `branch`
+   together and then sorts, but the models only declared them separately, so Mongo could not
+   serve the query from one index and sorted in memory.
+3. **Search could not use an index at all** — `$regex` with no anchor on barcode/SKU/IMEI
+   forces a full scan per keystroke.
+
+**Fixed:**
+- **18 compound indexes** added across Product, PhoneUnit, Sale, Purchase, Return, Expense,
+  Fund, Transfer, DuePayment, Installment, ServiceJob, WarrantyClaim, Customer, Supplier —
+  shaped `(business, branch, <sort/filter key>)` to match how `branchFilter` actually queries.
+  The old single-field indexes were deliberately **left in place**: dropping an index on a
+  live collection is a separate, riskier operation and they cost only a little write overhead.
+- **Opt-in pagination** on products/customers/suppliers/expenses. A caller that sends no
+  `page`/`pageSize` gets the full list *exactly as before* — this is load-bearing, because the
+  Stock Print reports, the supplier picker, the EMI customer picker and the IMEI-import product
+  dropdown all legitimately need every row and would have silently reported **wrong numbers**
+  if they had been quietly cut to one page. Only the table views opt in (50/page).
+- **New `GET /products/categories`.** The Products page used to build its category dropdown by
+  scraping the categories off whatever products it had loaded — correct only while it loaded the
+  entire catalog, so paginating would have silently shrunk the dropdown to page 1's categories.
+  This is both the fix and far cheaper than fetching every product to read one field.
+- **`lowStock=true` now filters in the query** (`$expr`) instead of filtering the fetched array
+  afterwards, which with pagination would only ever have filtered within the current page.
+- **Search made index-usable**: barcode / SKU / IMEI / serial are now anchored (`^term`) so their
+  indexes can be used; product **name stays a 'contains' match**, because a shopkeeper types a
+  word from the middle of a name and still expects to find it.
+- New shared `client/src/components/ui/Pagination.jsx` — renders **nothing** when everything
+  fits on one page, so no screen changes appearance for a small shop; it only appears once the
+  data has actually grown.
+- `load()` on each paginated page is guarded against being handed an event object (these are
+  passed straight to modals as `onChanged={load}`), so a future `onClick={load}` can't send
+  `?page=[object Object]`.
+
+- **Measured, not assumed** — against a 600-product catalog on the local replica set:
+  the products list query went **40.2ms -> 3.8ms (~10.6x)** with **92% less data per page load**,
+  and `explain()` confirms the query now uses `IXSCAN` with 50 docs examined for 50 returned
+  (a perfect 1:1, no waste) and **no in-memory sort**. On the live site, where the payload also
+  crosses the internet, the difference will be larger than the DB timing alone suggests.
+- Verified: `node --check` + full `app.js` import-chain + client `vite build`; a 26-case
+  end-to-end fixture covering page boundaries/overlap/clamping, filters combined with paging,
+  every search path, the EMI-due fields surviving pagination, **and explicit regression checks
+  that every unpaginated caller still receives the full list**; plus a live browser pass
+  (600 products -> 50 rows shown, "1-50 of 600", Next page working, all 6 categories still in
+  the dropdown, Stock Print still fetching all 600, zero console errors).
+- **Still to do (steps 2-3, not started):** caching for static-ish data (settings, categories,
+  payment accounts), moving heavy reports/imports to a background job, and then the separate
+  offline-first work. The remaining unpaginated lists (employees, funds, transfers,
+  installments, warranty claims) are smaller and were left for step 2.
+
+---
+
 ### How to resume after context loss
 1. Read this whole file. 2. Check the Phase Plan status markers (§3) for the first non-✅ phase. 3. Re-read that phase's bullet list + §4 conventions. 4. `git log --oneline` and `git status` to see what's committed. 5. Continue; update §3 status + §5 change log when done.

@@ -21,4 +21,6 @@ supplierSchema.virtual('due').get(function () {
 });
 supplierSchema.set('toJSON', { virtuals: true });
 
+supplierSchema.index({ business: 1, createdAt: -1 }); // supplier list's default sort
+
 export default mongoose.model('Supplier', supplierSchema);

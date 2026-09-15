@@ -14,8 +14,50 @@ export const getCustomers = asyncHandler(async (req, res) => {
   const { search } = req.query;
   const q = tenantFilter(req, { isActive: true });
   if (search) q.$or = [{ name: { $regex: search, $options: 'i' } }, { phone: { $regex: search, $options: 'i' } }];
-  const customers = await Customer.find(q).sort('-createdAt');
-  ok(res, { customers, count: customers.length });
+  // Opt-in pagination: callers that send no page/pageSize (the customer picker
+  // on the EMI screen, for instance) still get the full list exactly as before.
+  const wantsPage = req.query.page !== undefined || req.query.pageSize !== undefined;
+  const pg = Math.max(1, Number(req.query.page) || 1);
+  const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
+
+  let cq = Customer.find(q).sort('-createdAt').lean();
+  if (wantsPage) cq = cq.skip((pg - 1) * pageSize).limit(pageSize);
+  const [customers, total] = await Promise.all([
+    cq,
+    wantsPage ? Customer.countDocuments(q) : Promise.resolve(null),
+  ]);
+
+  // How much of each customer's outstanding due came from a sale marked EMI at
+  // the cart, and which products those were — so the list can separate "EMI Due"
+  // from an ordinary due instead of showing one undifferentiated number.
+  // Business-wide, exactly like Customer.totalDue itself (customers are shared
+  // across branches), and computed live from the sales rather than stored, so it
+  // can never drift out of step with what's actually owed.
+  const emiSales = await Sale.find(tenantFilter(req, { isEmi: true, due: { $gt: 0 }, customer: { $ne: null } }))
+    .select('customer due invoiceNo createdAt items.name items.qty')
+    .lean();
+  const emiByCustomer = new Map(); // customerId -> { amount, invoices:[{invoiceNo, due, date, products}] }
+  for (const s of emiSales) {
+    const key = String(s.customer);
+    const entry = emiByCustomer.get(key) || { amount: 0, invoices: [] };
+    entry.amount += s.due || 0;
+    entry.invoices.push({
+      invoiceNo: s.invoiceNo,
+      due: s.due || 0,
+      date: s.createdAt,
+      products: (s.items || []).map((i) => (i.qty > 1 ? `${i.name} ×${i.qty}` : i.name)),
+    });
+    emiByCustomer.set(key, entry);
+  }
+  for (const c of customers) {
+    const e = emiByCustomer.get(String(c._id));
+    c.emiDue = e ? Math.round(e.amount * 100) / 100 : 0;
+    c.emiInvoices = e ? e.invoices : [];
+    // whatever is left over is ordinary (non-EMI) due
+    c.regularDue = Math.max(0, Math.round(((c.totalDue || 0) - c.emiDue) * 100) / 100);
+  }
+
+  ok(res, { customers, count: customers.length, ...(wantsPage ? { total, page: pg, pageSize } : {}) });
 });
 
 export const createCustomer = asyncHandler(async (req, res) => {

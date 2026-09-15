@@ -11,6 +11,24 @@ import Product from '../models/Product.js';
 
 const genClaimNo = () => 'WC-' + Date.now().toString().slice(-8) + '-' + Math.floor(Math.random() * 90 + 10);
 
+// Free-list of what the customer handed in with the device (Box / Charger /
+// Only Mobile presets, plus anything typed). Trimmed, blanks dropped, de-duped
+// case-insensitively so "charger" and "Charger" can't both be listed.
+const cleanReceivedItems = (v) => {
+  if (!Array.isArray(v)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of v) {
+    const s = String(raw ?? '').trim();
+    if (!s) continue;
+    const k = s.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+};
+
 // @route GET /api/warranty-claims/lookup?imei=...
 // Prefills the "New Claim" form from a device this shop actually sold — product,
 // IMEI/serial and the customer's full contact details, plus current warranty
@@ -55,6 +73,45 @@ export const lookupForClaim = asyncHandler(async (req, res) => {
       warrantyStatus: unit.status !== 'sold' ? 'not_sold' : (active ? 'active' : 'expired'),
     },
   });
+});
+
+// @route GET /api/warranty-claims/by-number?number=WC-...
+// Look a claim up by its Warranty (claim) number — the number printed on the
+// slip the customer was given, so the counter can pull the whole claim back up
+// from that alone. Business-wide on purpose (same reasoning as Invoice Search):
+// the customer holds a physical slip and may walk into any branch with it, so
+// the response names which branch the claim actually belongs to. A branch-locked
+// staff login stays inside its own branch.
+export const findClaimByNumber = asyncHandler(async (req, res) => {
+  const { number } = req.query;
+  if (!number?.trim()) throw new ApiError(400, 'Warranty number is required');
+  const q = tenantFilter(req, { claimNo: { $regex: `^${String(number).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } });
+  if (req.user?.assignedBranch) q.branch = req.user.assignedBranch;
+
+  const claim = await WarrantyClaim.findOne(q)
+    .populate('branch', 'name')
+    .populate('product', 'name brand color storage warrantyBrandMonths warrantyShopMonths')
+    .populate('unit', 'imei1 imei2 serial status soldAt warrantyMonths warrantyExpiry warrantyBrandMonths warrantyShopMonths warrantyBrandExpiry warrantyShopExpiry');
+  if (!claim) throw new ApiError(404, 'No warranty claim found with that number');
+
+  // Warranty standing of the underlying device, when this claim was raised
+  // against a device the shop actually sold (a hand-entered claim has no unit).
+  let warranty = null;
+  if (claim.unit) {
+    const u = claim.unit;
+    const active = u.status === 'sold' && u.warrantyExpiry && new Date(u.warrantyExpiry) >= new Date();
+    warranty = {
+      status: u.status !== 'sold' ? 'not_sold' : (active ? 'active' : 'expired'),
+      soldAt: u.soldAt,
+      months: u.warrantyMonths,
+      expiry: u.warrantyExpiry,
+      brandMonths: u.warrantyBrandMonths,
+      shopMonths: u.warrantyShopMonths,
+      brandExpiry: u.warrantyBrandExpiry,
+      shopExpiry: u.warrantyShopExpiry,
+    };
+  }
+  ok(res, { claim, warranty });
 });
 
 // @route GET /api/warranty-claims/summary
@@ -143,6 +200,7 @@ export const createClaim = asyncHandler(async (req, res) => {
     customerNid: req.body.customerNid || '',
     customerAddress: req.body.customerAddress || '',
     problem: req.body.problem || '',
+    receivedItems: cleanReceivedItems(req.body.receivedItems),
     status: 'pending',
     statusHistory: [{ status: 'pending', at: new Date() }],
     createdBy: req.user._id,

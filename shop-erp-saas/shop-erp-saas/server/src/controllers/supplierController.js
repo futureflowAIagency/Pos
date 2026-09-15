@@ -17,8 +17,19 @@ export const getSuppliers = asyncHandler(async (req, res) => {
   const { search } = req.query;
   const q = tenantFilter(req, { isActive: true });
   if (search) q.$or = [{ name: { $regex: search, $options: 'i' } }, { phone: { $regex: search, $options: 'i' } }];
-  const suppliers = await Supplier.find(q).sort('-createdAt');
-  ok(res, { suppliers, count: suppliers.length });
+  // Opt-in pagination: callers that send no page/pageSize (the customer picker
+  // on the EMI screen, for instance) still get the full list exactly as before.
+  const wantsPage = req.query.page !== undefined || req.query.pageSize !== undefined;
+  const pg = Math.max(1, Number(req.query.page) || 1);
+  const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
+
+  let sq = Supplier.find(q).sort('-createdAt');
+  if (wantsPage) sq = sq.skip((pg - 1) * pageSize).limit(pageSize);
+  const [suppliers, total] = await Promise.all([
+    sq,
+    wantsPage ? Supplier.countDocuments(q) : Promise.resolve(null),
+  ]);
+  ok(res, { suppliers, count: suppliers.length, ...(wantsPage ? { total, page: pg, pageSize } : {}) });
 });
 
 // @route POST /api/suppliers

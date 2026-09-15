@@ -48,4 +48,6 @@ const returnSchema = new mongoose.Schema(
 
 returnSchema.index({ business: 1, createdAt: -1 });
 
+returnSchema.index({ business: 1, branch: 1, createdAt: -1 }); // returns history
+
 export default mongoose.model('Return', returnSchema);

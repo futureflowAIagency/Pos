@@ -102,4 +102,6 @@ installmentSchema.virtual('profitEarned').get(function () {
 });
 installmentSchema.set('toJSON', { virtuals: true });
 
+installmentSchema.index({ business: 1, branch: 1, createdAt: -1 }); // EMI plan list
+
 export default mongoose.model('Installment', installmentSchema);

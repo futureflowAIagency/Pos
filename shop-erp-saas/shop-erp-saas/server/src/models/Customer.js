@@ -20,4 +20,7 @@ const customerSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+customerSchema.index({ business: 1, createdAt: -1 }); // customer list's default sort
+customerSchema.index({ business: 1, phone: 1 }); // phone lookup at POS checkout
+
 export default mongoose.model('Customer', customerSchema);

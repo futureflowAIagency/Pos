@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Plus, Pencil, Trash2, Search, AlertTriangle, Barcode, ScanLine, Tag, Printer, PackagePlus, History, TrendingUp } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, AlertTriangle, Barcode, ScanLine, Tag, Printer, PackagePlus, History, TrendingUp, CalendarRange } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios.js';
 import DataTable from '../components/ui/DataTable.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import ComboBox from '../components/ui/ComboBox.jsx';
 import DropdownMenu from '../components/ui/DropdownMenu.jsx';
+import Pagination from '../components/ui/Pagination.jsx';
 import PaymentRows from '../components/ui/PaymentRows.jsx';
 import LabelPrintModal from '../components/print/LabelPrintModal.jsx';
 import PrintWrapper from '../components/print/PrintWrapper.jsx';
 import StockReport from '../components/print/StockReport.jsx';
 import StockReportByBrand from '../components/print/StockReportByBrand.jsx';
+import StockByDateReport from '../components/print/StockByDateReport.jsx';
 import ProductStockReport from '../components/print/ProductStockReport.jsx';
 import { taka, fmtDate, fmtDateTime, expiryStatus, daysUntil } from '../utils/format.js';
 import { useConfirm } from '../context/ConfirmContext.jsx';
@@ -42,6 +44,8 @@ const toDateInput = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
 const discounted = (p) => Math.round((p.sellingPrice * (1 - (p.discountPercent || 0) / 100)) * 100) / 100;
 // how many matches the search price panel shows before falling back to the table
 const PRICE_CARDS = 6;
+// rows per page in the product table (server-side paged)
+const PAGE_SIZE = 50;
 
 export default function Products() {
   const confirm = useConfirm();
@@ -62,6 +66,9 @@ export default function Products() {
   // the sync bug where Settings said 1 but Products still defaulted to 5.
   const defaultLowStock = business?.settings?.lowStockThreshold ?? 1;
   const [products, setProducts] = useState([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [listLoading, setListLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   // every category ever seen for this business — only grows, so the filter/combobox
@@ -111,6 +118,17 @@ export default function Products() {
   const [brandReport, setBrandReport] = useState(null); // { category, groups, today, lastDay }
   const [brandReportOpen, setBrandReportOpen] = useState(false);
   const [brandReportLoading, setBrandReportLoading] = useState(false);
+  // Stock Print by Date — pick ANY two dates and print each one's stock plus
+  // that day's sales (customer + which employee sold it), side by side. Both
+  // dates are free-form: yesterday vs today, or any two days at all.
+  const [dateReportOpen, setDateReportOpen] = useState(false);   // date-picker modal
+  const [dateReport, setDateReport] = useState(null);            // fetched report
+  const [dateReportPrintOpen, setDateReportPrintOpen] = useState(false);
+  const [dateReportLoading, setDateReportLoading] = useState(false);
+  const todayStr = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+  const daysAgoStr = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+  const [date1, setDate1] = useState(daysAgoStr(1));
+  const [date2, setDate2] = useState(todayStr());
   // Stock Print by Model — search a specific product by name, then print just
   // that product's own history: total sold all-time, every supplier it was
   // bought from, and current stock.
@@ -168,12 +186,31 @@ export default function Products() {
     setRateLoading(false);
   };
 
-  const load = async () => {
-    const { data } = await api.get('/products', { params: { search, category: categoryFilter || undefined } });
-    setProducts(data.data.products);
-    setCategoryOptions((prev) => [...new Set([...prev, ...data.data.products.map((p) => p.category).filter(Boolean)])].sort());
+  const load = async (arg) => {
+    // `load` is also handed straight to modals as onChanged={load}; if one ever
+    // calls it with an event object, fall back to the current page rather than
+    // sending that object to the server as ?page=[object Object].
+    const toPage = Number(arg) > 0 ? Number(arg) : page;
+    setListLoading(true);
+    try {
+      const { data } = await api.get('/products', {
+        params: { search, category: categoryFilter || undefined, page: toPage, pageSize: PAGE_SIZE },
+      });
+      setProducts(data.data.products);
+      setTotal(data.data.total ?? data.data.products.length);
+      setPage(toPage);
+    } finally { setListLoading(false); }
   };
-  useEffect(() => { const t = setTimeout(load, 300); return () => clearTimeout(t); }, [search, categoryFilter]);
+  // Searching/filtering restarts at page 1 — staying on page 7 of the old result
+  // set would otherwise show an empty table for a narrower search.
+  useEffect(() => { const t = setTimeout(() => load(1), 300); return () => clearTimeout(t); }, [search, categoryFilter]);
+  // Category options come from their own endpoint rather than being scraped off
+  // the loaded rows: the table now holds only one page, so deriving them from it
+  // would quietly shrink the dropdown to whatever page 1 happened to contain.
+  const loadCategories = () => api.get('/products/categories')
+    .then(({ data }) => setCategoryOptions(data.data.categories))
+    .catch(() => {});
+  useEffect(() => { loadCategories(); }, []);
   useEffect(() => { api.get('/suppliers').then(({ data }) => setSupplierList(data.data.suppliers)).catch(() => {}); }, []);
 
   // Whenever the Topbar's phone scanner is connected, every code it scans lands
@@ -272,6 +309,23 @@ export default function Products() {
     setBrandReportLoading(false);
   };
 
+  // Stock Print by Date — the whole comparison is built server-side (past stock
+  // has to be reconstructed from recorded movements), so this just fetches and
+  // opens the print preview.
+  const openDateReport = async () => {
+    if (!date1 || !date2) return toast.error('Pick both dates');
+    setDateReportLoading(true);
+    try {
+      const { data } = await api.get('/products/stock-by-date', {
+        params: { date1, date2, category: categoryFilter || undefined },
+      });
+      setDateReport(data.data.report);
+      setDateReportOpen(false);
+      setDateReportPrintOpen(true);
+    } catch (e) { toast.error(e.response?.data?.message || 'Failed to build stock comparison'); }
+    setDateReportLoading(false);
+  };
+
   // Scan/enter a barcode: if it matches an existing product, don't create a new
   // one — for IMEI-tracked products jump straight to adding a new device (req 1),
   // otherwise open the product for a stock edit. `explicitCode` lets the
@@ -363,7 +417,7 @@ export default function Products() {
         expiryDate: form.expiryDate || undefined,
       };
       await api.put(`/products/${editId}`, payload);
-      toast.success('Saved'); setModal(false); load();
+      toast.success('Saved'); setModal(false); load(); loadCategories();
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
   };
 
@@ -415,7 +469,7 @@ export default function Products() {
           })),
         });
       }
-      toast.success(anyRestock ? 'Stock updated' : 'Saved'); setModal(false); load();
+      toast.success(anyRestock ? 'Stock updated' : 'Saved'); setModal(false); load(); loadCategories();
     } catch (e) { toast.error(e.response?.data?.message || 'Error'); }
     setSaving(false);
   };
@@ -506,6 +560,7 @@ export default function Products() {
               { label: 'Stock Print (by Supplier)', icon: Printer, onClick: () => setStockSupplierPickerOpen(true), disabled: stockReportLoading },
               { label: 'Stock Print by Brands', icon: Printer, onClick: openBrandReport, disabled: brandReportLoading },
               { label: 'Stock Print by Model', icon: Search, onClick: () => setModelSearchOpen(true) },
+              { label: 'Stock Print by Date', icon: CalendarRange, onClick: () => setDateReportOpen(true), disabled: dateReportLoading },
               { label: 'Item Purchase Rate Information', icon: History, onClick: () => setRateSearchOpen(true) },
             ]}
           />
@@ -612,6 +667,7 @@ export default function Products() {
       )}
 
       <DataTable columns={columns} rows={products} />
+      <Pagination page={page} pageSize={PAGE_SIZE} total={total} loading={listLoading} onPage={load} />
 
       <Modal open={modal} onClose={() => setModal(false)} title={editId ? 'Edit Product' : 'Add Product'} size="lg"
         footer={<>
@@ -766,6 +822,46 @@ export default function Products() {
           {supplierList.map((s) => <option key={s._id} value={s._id}>{s.name}</option>)}
         </select>
       </Modal>
+
+      {/* Stock Print by Date — any two dates, compared side by side. Deliberately
+          two free date inputs (not a "yesterday vs today" shortcut) so a Friday
+          or any other gap can be compared just as easily. */}
+      <Modal open={dateReportOpen} onClose={() => setDateReportOpen(false)} title="Stock Print by Date"
+        footer={<>
+          <button className="btn-ghost" onClick={() => setDateReportOpen(false)}>Cancel</button>
+          <button className="btn-primary" disabled={dateReportLoading} onClick={openDateReport}>
+            {dateReportLoading ? 'Building...' : 'Generate & Print'}
+          </button>
+        </>}>
+        <p className="text-sm text-slate-500 mb-3">
+          Compare the shop's stock on any two dates. Each date prints its own stock list plus
+          that day's sales — which customer bought what, and which employee sold it.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">First date</label>
+            <input className="input" type="date" max={todayStr()} value={date1} onChange={(e) => setDate1(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Second date</label>
+            <input className="input" type="date" max={todayStr()} value={date2} onChange={(e) => setDate2(e.target.value)} />
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 mt-2">
+          <button type="button" className="btn-ghost !py-1 text-xs" onClick={() => { setDate1(daysAgoStr(1)); setDate2(todayStr()); }}>Yesterday vs Today</button>
+          <button type="button" className="btn-ghost !py-1 text-xs" onClick={() => { setDate1(daysAgoStr(2)); setDate2(todayStr()); }}>2 days ago vs Today</button>
+          <button type="button" className="btn-ghost !py-1 text-xs" onClick={() => { setDate1(daysAgoStr(7)); setDate2(todayStr()); }}>A week ago vs Today</button>
+        </div>
+        <p className="text-xs text-slate-400 mt-3">
+          Report covers <strong>{categoryFilter || 'All Categories'}</strong> (follows the category filter on this page).
+          Stock for a past date is reconstructed from recorded sales, purchases, returns and stock
+          adjustments; IMEI/serial-tracked devices are exact.
+        </p>
+      </Modal>
+
+      <PrintWrapper open={dateReportPrintOpen} onClose={() => setDateReportPrintOpen(false)} title="Stock Comparison Report">
+        {dateReport && <StockByDateReport business={business} report={dateReport} />}
+      </PrintWrapper>
 
       <PrintWrapper open={stockReportOpen} onClose={() => setStockReportOpen(false)} title="Stock Report">
         {stockReport && <StockReport business={business} category={stockReport.category} groups={stockReport.groups} />}

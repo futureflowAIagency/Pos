@@ -37,6 +37,9 @@ export default function WarrantyClaimReceipt({ claim, business }) {
       {claim.imei2 ? <div>IMEI 2: {claim.imei2}</div> : null}
       {claim.serial ? <div>Serial: {claim.serial}</div> : null}
       {claim.problem ? <div>Problem: {claim.problem}</div> : null}
+      {/* exactly what the customer handed over — the whole point of them keeping
+          this slip, so it must be on the printed copy, not just on screen */}
+      {claim.receivedItems?.length ? <div>Received with device: {claim.receivedItems.join(', ')}</div> : null}
       <div>Status: {STATUS_LABEL[claim.status] || claim.status}</div>
       <div className="thermal-divider" />
       <div style={{ textAlign: 'center', marginTop: 4 }}>

@@ -23,4 +23,6 @@ const transferSchema = new mongoose.Schema(
 
 transferSchema.index({ business: 1, date: -1 });
 
+transferSchema.index({ business: 1, branch: 1, date: -1 }); // transfer history
+
 export default mongoose.model('Transfer', transferSchema);

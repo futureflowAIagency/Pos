@@ -14,6 +14,9 @@ import PurchaseBatch from '../models/PurchaseBatch.js';
 import Sale from '../models/Sale.js';
 import StockSnapshot from '../models/StockSnapshot.js';
 import Business from '../models/Business.js';
+import Return from '../models/Return.js';
+import Installment from '../models/Installment.js';
+import ActivityLog from '../models/ActivityLog.js';
 
 const TENDERS = ['cash', 'bank', 'bkash', 'nagad', 'rocket', 'card'];
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -42,14 +45,21 @@ export const getProducts = asyncHandler(async (req, res) => {
     // IMEI that's already in stock expects to find the product it belongs to,
     // not just products matched by name/SKU/barcode. Scoped to the active branch
     // — a scanned/typed code should only resolve stock actually on this shelf.
-    const rx = { $regex: escapeRegex(search), $options: 'i' };
+    const term = escapeRegex(search);
+    const rx = { $regex: term, $options: 'i' };
+    // Anchored (starts-with) match for the code-like fields. A leading-wildcard
+    // regex can't use an index at all, so on a big catalog those had to scan
+    // every row; anchoring lets the barcode/SKU/IMEI indexes actually be used.
+    // Names stay 'contains' — a shopkeeper types a word from the middle of a
+    // product name and still expects to find it.
+    const pre = { $regex: '^' + term, $options: 'i' };
     const unitProductIds = await PhoneUnit.find(branchFilter(req, {
-      $or: [{ imei1: rx }, { imei2: rx }, { serial: rx }],
+      $or: [{ imei1: pre }, { imei2: pre }, { serial: pre }],
     })).distinct('product');
     q.$or = [
       { name: rx },
-      { sku: rx },
-      { barcode: rx },
+      { sku: pre },
+      { barcode: pre },
       // "smart search" — also match category/brand/storage/color, so e.g.
       // typing "128GB" or "Black" or a category name surfaces matches too,
       // not just an exact product-name/SKU/barcode hit.
@@ -61,11 +71,47 @@ export const getProducts = asyncHandler(async (req, res) => {
     ];
   }
   if (category) q.category = category;
+  // Low-stock filtering happens IN the query (a field-to-field comparison needs
+  // $expr), not by filtering the fetched array afterwards — otherwise it would
+  // only ever filter within whichever page happened to be loaded.
+  if (lowStock === 'true') q.$expr = { $lte: ['$stock', '$lowStockAlert'] };
 
-  let products = await Product.find(q).sort('-createdAt').populate('supplier', 'name');
-  if (lowStock === 'true') products = products.filter((p) => p.stock <= p.lowStockAlert);
+  // Pagination is OPT-IN: a caller that sends no page/pageSize gets the full
+  // list exactly as before. That matters because several callers genuinely need
+  // every row — the Stock Print reports, the supplier/product pickers and the
+  // IMEI-import product dropdown would all silently report wrong numbers if they
+  // were quietly cut to one page. Only the table views ask for a page.
+  const wantsPage = req.query.page !== undefined || req.query.pageSize !== undefined;
+  const pg = Math.max(1, Number(req.query.page) || 1);
+  const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
+
+  let query = Product.find(q).sort('-createdAt').populate('supplier', 'name');
+  if (wantsPage) query = query.skip((pg - 1) * pageSize).limit(pageSize);
+
+  const [products, total] = await Promise.all([
+    query,
+    wantsPage ? Product.countDocuments(q) : Promise.resolve(null),
+  ]);
+
   const out = canViewBuyPrice(req) ? products : products.map((p) => hideBuyPrice(p.toObject()));
-  ok(res, { products: out, count: out.length });
+  ok(res, {
+    products: out,
+    count: out.length,
+    ...(wantsPage ? { total, page: pg, pageSize } : {}),
+  });
+});
+
+// @route GET /api/products/categories
+// Just the distinct category names for this branch. The Products page used to
+// derive its category dropdown from whatever products it had loaded — which is
+// correct only while it loads the WHOLE catalog, so paginating the list would
+// have silently shrunk that dropdown to the categories on page 1. This is both
+// the fix for that and far cheaper than fetching every product to read one field.
+export const getProductCategories = asyncHandler(async (req, res) => {
+  const categories = (await Product.distinct('category', branchFilter(req, { isActive: true })))
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+  ok(res, { categories });
 });
 
 // @route GET /api/products/barcode/:code  — resolve a product by its barcode (scan)
@@ -536,5 +582,193 @@ export const getProductReport = asyncHandler(async (req, res) => {
     currentStock: product.stock,
     suppliers: bySupplier,
     sales: saleRows,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stock Print by Date — compare the shop's stock on any TWO chosen days, with
+// each day's own sales (who bought what, and who sold it) printed alongside.
+//
+// Nothing in this system stores a per-product stock figure per day, so each
+// day's stock is RECONSTRUCTED by winding today's stock backwards through every
+// movement recorded since then:
+//   - serial-tracked products are exact: each PhoneUnit knows when it was
+//     created and when it was sold, so "in stock at the end of day D" is just a
+//     count of the units that existed by then and weren't sold yet;
+//   - quantity products wind back sales, purchases, resellable returns, EMI
+//     plans and manual stock adjustments (ActivityLog records before/after for
+//     those), which between them cover every routine way stock moves here.
+// The one movement NOT wound back is a branch-to-branch Stock Transfer, and a
+// unit deleted outright from Manage IMEIs can't be counted for a day it was
+// still on the shelf. Both are stated on the report itself rather than left to
+// quietly skew a number the owner is about to act on.
+// ---------------------------------------------------------------------------
+
+const dayStart = (d) => new Date(`${d}T00:00:00.000`);
+const dayEnd = (d) => new Date(`${d}T23:59:59.999`);
+const variantOf = (p) => [p.brand, p.storage, p.color].filter(Boolean).join(' - ');
+
+// Stock on hand at `asOf` for every product in `products`, keyed by product id.
+async function stockAsOf(req, asOf, products) {
+  const bizOid = new mongoose.Types.ObjectId(req.businessId);
+  const branchOid = new mongoose.Types.ObjectId(req.branchId);
+  const serialIds = products.filter((p) => p.trackSerial).map((p) => p._id);
+  const qtyProducts = products.filter((p) => !p.trackSerial);
+  const qtyIds = qtyProducts.map((p) => p._id);
+  const out = new Map();
+
+  // ---- serial-tracked: exact, straight off the unit rows ----
+  if (serialIds.length) {
+    const rows = await PhoneUnit.aggregate([
+      {
+        $match: {
+          business: bizOid,
+          branch: branchOid,
+          product: { $in: serialIds },
+          createdAt: { $lte: asOf },
+          // not yet sold as of that moment (an unsold unit has soldAt null)
+          $or: [{ soldAt: null }, { soldAt: { $gt: asOf } }],
+        },
+      },
+      { $group: { _id: '$product', n: { $sum: 1 } } },
+    ]);
+    for (const r of rows) out.set(String(r._id), r.n);
+    for (const id of serialIds) if (!out.has(String(id))) out.set(String(id), 0);
+  }
+
+  // ---- quantity products: wind today's number backwards ----
+  if (qtyIds.length) {
+    const idSet = new Set(qtyIds.map(String));
+    const delta = new Map(); // product id -> net change that happened AFTER asOf
+    const bump = (pid, n) => { const k = String(pid); if (idSet.has(k)) delta.set(k, (delta.get(k) || 0) + n); };
+
+    const [sales, batches, returns, emiPlans, adjustments] = await Promise.all([
+      Sale.find(branchFilter(req, { createdAt: { $gt: asOf } })).select('items.product items.qty').lean(),
+      PurchaseBatch.find(branchFilter(req, { purchaseDate: { $gt: asOf }, product: { $in: qtyIds } })).select('product qtyPurchased').lean(),
+      Return.find(branchFilter(req, { createdAt: { $gt: asOf } })).select('items.product items.qty items.condition').lean(),
+      Installment.find(tenantFilter(req, { createdAt: { $gt: asOf }, product: { $in: qtyIds } })).select('product').lean(),
+      ActivityLog.find(tenantFilter(req, { action: 'ADJUST_STOCK', entity: 'Product', entityId: { $in: qtyIds }, createdAt: { $gt: asOf } })).select('entityId meta').lean(),
+    ]);
+
+    // a sale after asOf took stock out -> add it back
+    for (const s of sales) for (const it of (s.items || [])) bump(it.product, Number(it.qty) || 0);
+    // a purchase after asOf brought stock in -> take it back out
+    for (const b of batches) bump(b.product, -(Number(b.qtyPurchased) || 0));
+    // a resellable return after asOf put stock back -> take it back out
+    // (a damaged return never restocks, so it must NOT be wound back)
+    for (const r of returns) for (const it of (r.items || [])) {
+      if (it.condition !== 'damaged') bump(it.product, -(Number(it.qty) || 0));
+    }
+    // an EMI plan after asOf took one unit out -> add it back
+    for (const p of emiPlans) bump(p.product, 1);
+    // a manual adjustment after asOf moved stock by (after - before) -> undo it
+    for (const a of adjustments) {
+      const before = Number(a.meta?.before);
+      const after = Number(a.meta?.after);
+      if (Number.isFinite(before) && Number.isFinite(after)) bump(a.entityId, -(after - before));
+    }
+
+    for (const p of qtyProducts) {
+      const n = (Number(p.stock) || 0) + (delta.get(String(p._id)) || 0);
+      out.set(String(p._id), Math.max(0, Math.round(n * 1000) / 1000));
+    }
+  }
+
+  return out;
+}
+
+// Every sale line that went out on one calendar day, with the customer who
+// bought it and the employee who rang it up.
+async function salesOnDay(req, day) {
+  const sales = await Sale.find(branchFilter(req, { createdAt: { $gte: dayStart(day), $lte: dayEnd(day) } }))
+    .populate('soldBy', 'name')
+    .sort('createdAt')
+    .lean();
+  const rows = [];
+  for (const s of sales) {
+    for (const it of (s.items || [])) {
+      rows.push({
+        invoiceNo: s.invoiceNo,
+        at: s.createdAt,
+        productName: it.name,
+        imei: it.imei1 || it.serial || '',
+        qty: it.qty,
+        returnedQty: it.returnedQty || 0,
+        sellingPrice: it.sellingPrice,
+        lineTotal: Math.round(it.sellingPrice * it.qty * 100) / 100,
+        customerName: s.customerName || 'Walk-in',
+        // the employee typed at the counter, else the login that rang it up
+        soldByName: s.soldByName || s.soldBy?.name || '-',
+        isEmi: !!s.isEmi,
+      });
+    }
+  }
+  return rows;
+}
+
+// @route GET /api/products/stock-by-date?date1=YYYY-MM-DD&date2=YYYY-MM-DD&category=
+export const getStockByDate = asyncHandler(async (req, res) => {
+  const { date1, date2, category } = req.query;
+  const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+  if (!isDay(date1) || !isDay(date2)) throw new ApiError(400, 'Pick both dates (YYYY-MM-DD)');
+  // always report oldest -> newest, whichever order they were picked in
+  const [d1, d2] = date1 <= date2 ? [date1, date2] : [date2, date1];
+
+  const q = branchFilter(req);
+  if (category) q.category = category;
+  const products = await Product.find(q)
+    .select('name category brand storage color unit stock trackSerial supplier')
+    .populate('supplier', 'name')
+    .sort('name')
+    .lean();
+
+  const [stock1, stock2, sales1, sales2] = await Promise.all([
+    stockAsOf(req, dayEnd(d1), products),
+    stockAsOf(req, dayEnd(d2), products),
+    salesOnDay(req, d1),
+    salesOnDay(req, d2),
+  ]);
+
+  // One row per product that had stock on either day, so the printed comparison
+  // reads as a single side-by-side list.
+  const rows = products.map((p) => {
+    const k = String(p._id);
+    const qty1 = stock1.get(k) || 0;
+    const qty2 = stock2.get(k) || 0;
+    return {
+      product: p._id,
+      name: p.name,
+      category: p.category || '',
+      variant: variantOf(p),
+      unit: p.unit || 'pcs',
+      supplier: p.supplier?.name || '',
+      qty1,
+      qty2,
+      change: Math.round((qty2 - qty1) * 1000) / 1000,
+    };
+  }).filter((r) => r.qty1 > 0 || r.qty2 > 0);
+
+  const sum = (rws, k) => Math.round(rws.reduce((s, r) => s + (Number(r[k]) || 0), 0) * 1000) / 1000;
+  const soldQty = (rws) => Math.round(rws.reduce((s, r) => s + (Number(r.qty) || 0), 0) * 1000) / 1000;
+  const soldValue = (rws) => Math.round(rws.reduce((s, r) => s + (Number(r.lineTotal) || 0), 0) * 100) / 100;
+
+  ok(res, {
+    report: {
+      category: category || '',
+      date1: d1,
+      date2: d2,
+      rows,
+      // products that ran out entirely between the two dates, and how many
+      // simply moved - the questions the owner actually asks of this report
+      soldOut: rows.filter((r) => r.qty1 > 0 && r.qty2 === 0).map((r) => r.name),
+      decreased: rows.filter((r) => r.change < 0).length,
+      increased: rows.filter((r) => r.change > 0).length,
+      totals: {
+        date1: { products: rows.filter((r) => r.qty1 > 0).length, qty: sum(rows, 'qty1'), soldLines: sales1.length, soldQty: soldQty(sales1), soldValue: soldValue(sales1) },
+        date2: { products: rows.filter((r) => r.qty2 > 0).length, qty: sum(rows, 'qty2'), soldLines: sales2.length, soldQty: soldQty(sales2), soldValue: soldValue(sales2) },
+      },
+      sales1,
+      sales2,
+    },
   });
 });

@@ -33,6 +33,9 @@ export default function WarrantyDeliveryReceipt({ claim, business }) {
       {claim.imei2 ? <div>IMEI 2: {claim.imei2}</div> : null}
       {claim.serial ? <div>Serial: {claim.serial}</div> : null}
       {claim.problem ? <div>Problem: {claim.problem}</div> : null}
+      {/* same list as the original claim slip, so both sides can check the
+          accessories that came in are the ones going back out */}
+      {claim.receivedItems?.length ? <div>Returned with device: {claim.receivedItems.join(', ')}</div> : null}
       <div className="thermal-divider" />
       <div style={{ textAlign: 'center', marginTop: 4 }}>
         The above device has been returned to the customer<br />

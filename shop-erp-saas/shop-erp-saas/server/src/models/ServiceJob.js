@@ -48,4 +48,6 @@ const serviceJobSchema = new mongoose.Schema(
 
 serviceJobSchema.index({ business: 1, createdAt: -1 });
 
+serviceJobSchema.index({ business: 1, branch: 1, createdAt: -1 }); // service job list
+
 export default mongoose.model('ServiceJob', serviceJobSchema);

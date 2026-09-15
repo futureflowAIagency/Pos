@@ -56,4 +56,6 @@ const purchaseSchema = new mongoose.Schema(
 
 purchaseSchema.index({ business: 1, createdAt: -1 });
 
+purchaseSchema.index({ business: 1, branch: 1, createdAt: -1 }); // purchase history
+
 export default mongoose.model('Purchase', purchaseSchema);

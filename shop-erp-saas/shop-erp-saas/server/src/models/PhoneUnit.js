@@ -50,4 +50,7 @@ const phoneUnitSchema = new mongoose.Schema(
 phoneUnitSchema.index({ business: 1, imei1: 1 });
 phoneUnitSchema.index({ business: 1, serial: 1 });
 
+phoneUnitSchema.index({ business: 1, branch: 1, product: 1, status: 1 }); // per-product in-stock counts (hot path: every stock sync)
+phoneUnitSchema.index({ business: 1, branch: 1, status: 1 }); // branch stock listings
+
 export default mongoose.model('PhoneUnit', phoneUnitSchema);
