@@ -1195,5 +1195,40 @@ always 404'd even when the claim genuinely existed.
 
 ---
 
+### ✅ Follow-up — the "start a new claim" lookup was IMEI-only too (2026-09-15)
+
+Same-day follow-up to the Warranty Search by Number fix, but a DIFFERENT box: the client
+clarified they meant "Search by the device's IMEI/serial" (`GET /warranty-claims/lookup`) -
+the box used to auto-fill product + customer details when STARTING a brand-new claim, distinct
+from the box that searches already-submitted claims (fixed earlier the same day). This one was
+still exact-IMEI-only, and the client specifically asked: search by phone number too, and if
+that customer bought more than one product, show a picker for which one's warranty is being
+claimed.
+
+- `lookupForClaim` widened the same way: matches an exact IMEI/serial (unique, so this alone
+  can never return more than one device) OR the customer's phone number via `Customer.phone`
+  (a customer who bought several things over time can have more than one match). Returns an
+  **array** of matches - 0 (still a clean 404, manual entry), exactly 1 (skips straight to
+  filling the form, preserving the old single-scan feel), or several.
+- `ClaimWarranty.jsx`: `fillFromMatch()` extracted from the old inline fill logic so both the
+  single-match and picked-from-a-list paths use it identically. More than one match renders a
+  list - product name + variant, IMEI/serial, customer name/phone, purchase date, and a
+  warranty-active/expired/not-sold badge per row - clicking one fills the form exactly as a
+  single IMEI match always has. Label/placeholder text updated to mention the phone-number path
+  and explain the picker up front.
+- Verified: server `node --check` + full `app.js` import-chain + client `vite build`; an
+  18-case fixture that sells TWO different serial-tracked products to the same customer/phone
+  number (mirroring the client's exact ask), confirming: phone-number search returns both
+  purchases with correct warranty status, an exact IMEI still narrows to exactly one (no
+  picker shown), a customer with only non-serial purchases still 404s cleanly (nothing to
+  claim against), a short numeric fragment doesn't explode into a broad scan, and a claim
+  built from a picked match correctly keeps the linked unit/product (not a manually-typed
+  fallback) - 18/18; then reproduced live in the browser (two real sales via the actual
+  checkout flow, searched by phone, got "2 purchases found - pick which product", selected the
+  mouse, confirmed IMEI 1/product name/customer all filled from the CORRECT device, not the
+  keyboard) with every `/warranty-claims/*` call returning 200.
+
+---
+
 ### How to resume after context loss
 1. Read this whole file. 2. Check the Phase Plan status markers (§3) for the first non-✅ phase. 3. Re-read that phase's bullet list + §4 conventions. 4. `git log --oneline` and `git status` to see what's committed. 5. Continue; update §3 status + §5 change log when done.

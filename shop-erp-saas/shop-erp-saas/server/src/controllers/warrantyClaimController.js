@@ -36,21 +36,42 @@ const cleanReceivedItems = (v) => {
 // status so the counter can see at a glance whether the claim is legitimate.
 // Business-wide (like the Warranty Check portal) — a customer may not remember
 // which branch they bought from.
+//
+// Matches on an exact IMEI/serial (unique, so this alone can never return more
+// than one device) OR the customer's phone number — a customer who bought
+// several devices over time can have more than one match on their phone
+// number, so this can return several candidates instead of one; the frontend
+// shows a pick-list ("which product's warranty do you want to claim?") when
+// that happens, and fills the form straight away for the common single-match
+// case (typing/scanning a real IMEI).
 export const lookupForClaim = asyncHandler(async (req, res) => {
-  const { imei } = req.query;
-  if (!imei) throw new ApiError(400, 'IMEI / serial is required');
-  const term = imei.trim();
-  const unit = await PhoneUnit.findOne(tenantFilter(req, {
-    $or: [{ imei1: term }, { imei2: term }, { serial: term }],
+  const term = String(req.query.imei || '').trim();
+  if (!term) throw new ApiError(400, 'Enter an IMEI/serial or the customer\'s phone number');
+
+  const rx = { $regex: escapeRegex(term), $options: 'i' };
+  // Only consult the phone-number path once there's enough of a number typed —
+  // a 1-2 digit fragment would otherwise match half the customer list.
+  const customerIds = term.length >= 3
+    ? await Customer.find(tenantFilter(req, { phone: rx })).distinct('_id')
+    : [];
+
+  const units = await PhoneUnit.find(tenantFilter(req, {
+    $or: [
+      { imei1: term }, { imei2: term }, { serial: term },
+      ...(customerIds.length ? [{ customer: { $in: customerIds } }] : []),
+    ],
   }))
+    .sort('-soldAt')
+    .limit(20)
     .populate('product', 'name brand color storage')
     .populate('customer', 'name phone nid address');
-  if (!unit) throw new ApiError(404, 'No device found for this IMEI/serial in your shop — you can still add this claim manually');
+
+  if (!units.length) throw new ApiError(404, 'No device found for this IMEI/serial or phone number in your shop — you can still add this claim manually');
 
   const now = new Date();
-  const active = unit.status === 'sold' && unit.warrantyExpiry && new Date(unit.warrantyExpiry) >= now;
-  ok(res, {
-    result: {
+  const results = units.map((unit) => {
+    const active = unit.status === 'sold' && unit.warrantyExpiry && new Date(unit.warrantyExpiry) >= now;
+    return {
       unit: unit._id,
       product: unit.product?._id || null,
       productName: unit.product?.name || '',
@@ -72,8 +93,9 @@ export const lookupForClaim = asyncHandler(async (req, res) => {
       warrantyBrandExpiry: unit.warrantyBrandExpiry,
       warrantyShopExpiry: unit.warrantyShopExpiry,
       warrantyStatus: unit.status !== 'sold' ? 'not_sold' : (active ? 'active' : 'expired'),
-    },
+    };
   });
+  ok(res, { results, count: results.length });
 });
 
 // @route GET /api/warranty-claims/by-number?number=WC-...

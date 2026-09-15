@@ -60,6 +60,10 @@ export default function ClaimWarranty() {
   const [lookupImei, setLookupImei] = useState('');
   const [looking, setLooking] = useState(false);
   const [lookupHint, setLookupHint] = useState('');
+  // If the phone number typed above matches more than one device this shop
+  // sold (a customer who bought several things over time), the lookup holds
+  // off filling the form and shows these instead — picking one fills it.
+  const [lookupMatches, setLookupMatches] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [printClaim, setPrintClaim] = useState(null);
@@ -138,24 +142,40 @@ export default function ClaimWarranty() {
     setNumberQuery(''); setNumberResults([]); setNumberSelected(null); setNumberError(''); setNumberSearched(false);
   };
 
+  // Fills the claim form from one matched device — used both when the lookup
+  // returns exactly one match, and when the counter picks one off a longer list.
+  const fillFromMatch = (r) => {
+    setForm({
+      unit: r.unit, product: r.product, customer: r.customer,
+      productName: r.productName || '', imei1: r.imei1 || '', imei2: r.imei2 || '', serial: r.serial || '',
+      customerName: r.customerName || '', customerPhone: r.customerPhone || '',
+      customerNid: r.customerNid || '', customerAddress: r.customerAddress || '',
+      problem: '',
+      // keep whatever the counter has already ticked off — the lookup fills in
+      // device/customer details, it doesn't know what was physically handed in
+      receivedItems: form.receivedItems,
+    });
+    const wLabel = r.warrantyStatus === 'active' ? 'warranty is active' : r.warrantyStatus === 'expired' ? 'warranty has expired' : 'not marked sold yet';
+    setLookupHint(`Found: ${r.productName}${r.productVariant ? ` (${r.productVariant})` : ''} — ${wLabel}. Details filled in below.`);
+    setLookupMatches([]);
+  };
+
   const lookup = async () => {
     if (!lookupImei.trim()) return;
-    setLooking(true); setLookupHint('');
+    setLooking(true); setLookupHint(''); setLookupMatches([]);
     try {
       const { data } = await api.get('/warranty-claims/lookup', { params: { imei: lookupImei.trim() } });
-      const r = data.data.result;
-      setForm({
-        unit: r.unit, product: r.product, customer: r.customer,
-        productName: r.productName || '', imei1: r.imei1 || '', imei2: r.imei2 || '', serial: r.serial || '',
-        customerName: r.customerName || '', customerPhone: r.customerPhone || '',
-        customerNid: r.customerNid || '', customerAddress: r.customerAddress || '',
-        problem: '',
-        // keep whatever the counter has already ticked off — the IMEI lookup
-        // fills in device/customer details, it doesn't know what was handed in
-        receivedItems: form.receivedItems,
-      });
-      const wLabel = r.warrantyStatus === 'active' ? 'warranty is active' : r.warrantyStatus === 'expired' ? 'warranty has expired' : 'not marked sold yet';
-      setLookupHint(`Found: ${r.productName}${r.productVariant ? ` (${r.productVariant})` : ''} — ${wLabel}. Details filled in below.`);
+      const results = data.data.results || [];
+      if (results.length === 1) {
+        // the common case — a scanned/typed IMEI can only ever match one
+        // device, so skip straight to filling the form as before
+        fillFromMatch(results[0]);
+      } else if (results.length > 1) {
+        // a phone number that bought more than one device — let the counter
+        // say which product's warranty is actually being claimed
+        setLookupMatches(results);
+        setLookupHint(`${results.length} purchases found for that number — pick which product's warranty you're claiming:`);
+      }
     } catch (e) {
       if (e.response?.status === 404) {
         setForm({ ...emptyForm, imei1: lookupImei.trim(), receivedItems: form.receivedItems });
@@ -265,14 +285,45 @@ export default function ClaimWarranty() {
       </div>
 
       <div className="card p-4 space-y-3">
-        <p className="text-sm text-slate-500">Search by the device's IMEI/serial to auto-fill its product &amp; customer details — or skip the search and fill the form in by hand (e.g. a device bought elsewhere).</p>
+        <p className="text-sm text-slate-500">Search by the device's IMEI/serial <strong>or the customer's phone number</strong> to auto-fill product &amp; customer details — or skip the search and fill the form in by hand (e.g. a device bought elsewhere). If the same number bought more than one product, you'll be asked which one's warranty you're claiming.</p>
         <div className="flex items-center gap-2">
           <Search size={18} className="text-slate-400 shrink-0" />
-          <input className="input" placeholder="Enter IMEI / Serial..." value={lookupImei}
+          <input className="input" placeholder="Enter IMEI / Serial or a phone number..." value={lookupImei}
             onChange={(e) => setLookupImei(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') lookup(); }} />
           <button className="btn-ghost shrink-0" disabled={looking} onClick={lookup}>{looking ? 'Searching...' : 'Search'}</button>
         </div>
         {lookupHint && <p className="text-xs text-brand-600">{lookupHint}</p>}
+
+        {/* More than one device bought under this phone number — pick which
+            product's warranty is actually being claimed before the form fills in. */}
+        {lookupMatches.length > 0 && (
+          <div className="space-y-1.5">
+            {lookupMatches.map((r) => (
+              <button
+                key={r.unit}
+                type="button"
+                onClick={() => fillFromMatch(r)}
+                className="w-full text-left rounded-lg border border-brand-200 dark:border-slate-700 hover:bg-brand-50 dark:hover:bg-slate-700/40 p-2.5 flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <span className="font-medium">{r.productName}</span>
+                  {r.productVariant && <span className="text-xs text-slate-400 ml-1">({r.productVariant})</span>}
+                  <p className="text-xs text-slate-400 truncate">
+                    {r.imei1 || r.serial || '—'} • {r.customerName}{r.customerPhone ? ` (${r.customerPhone})` : ''}
+                    {r.soldAt ? ` • bought ${fmtDateTime(r.soldAt)}` : ''}
+                  </p>
+                </div>
+                <span className={`badge shrink-0 ${
+                  r.warrantyStatus === 'active' ? 'bg-green-100 text-green-700'
+                    : r.warrantyStatus === 'expired' ? 'bg-red-100 text-red-700'
+                    : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {r.warrantyStatus === 'active' ? 'Warranty active' : r.warrantyStatus === 'expired' ? 'Warranty expired' : 'Not sold'}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-200 dark:border-slate-700">
           <div><label className="label">Product Name</label><input className="input" value={form.productName} onChange={set('productName')} /></div>
